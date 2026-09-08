@@ -346,20 +346,81 @@ void NdbWriter::emitFixedPages() {
         writeAt(ib, page.data(), page.size());
     };
 
-    // Density list: present but empty.  It is only an allocation hint.
+    // Free 64-byte slots per allocation map, which both the density list and
+    // the header's free-space totals are derived from.
+    std::vector<std::uint32_t> free_slots(amaps_.size(), 0);
+    amap_free_ = 0;
+    for (std::size_t i = 0; i < amaps_.size(); ++i) {
+        std::uint32_t n = 0;
+        for (std::uint8_t byte : amaps_[i]) {
+            for (int b = 0; b < 8; ++b) {
+                if ((byte & (0x80u >> b)) == 0) ++n;
+            }
+        }
+        free_slots[i] = n;
+        amap_free_ += static_cast<std::uint64_t>(n) * kBlockAlign;
+    }
+
+    // Density list.  This is how a writer finds space quickly, and leaving it
+    // empty says the file is completely full: Outlook opens a store for
+    // writing and allocates immediately, so an empty list plus a fully
+    // allocated PMap leaves it nowhere to go.
     {
         std::vector<std::uint8_t> body(496, 0);
+        std::size_t count = 0;
+        std::uint32_t current = 0;
+        for (std::size_t i = 0; i < amaps_.size() && count < 119; ++i) {
+            if (free_slots[i] == 0) continue;
+            if (count == 0) current = static_cast<std::uint32_t>(i);
+            // Low 20 bits are the AMap index, the top 12 the free slot count.
+            const std::uint32_t slots = std::min<std::uint32_t>(free_slots[i], 0xFFF);
+            poke32(body.data() + 8 + count * 4,
+                   (static_cast<std::uint32_t>(i) & 0xFFFFFu) | (slots << 20));
+            ++count;
+        }
+        body[0] = 0x01;  // bFlags: the list is valid
+        body[1] = static_cast<std::uint8_t>(count);
+        poke32(body.data() + 4, current);
         write_page(kDListPos, kPTypeDList, body, /*signed_page=*/true);
     }
+
     // Allocation maps.
     for (std::size_t i = 0; i < amaps_.size(); ++i) {
         write_page(kFirstAMapPos + i * kAMapSpan, kPTypeAMap, amaps_[i],
                    /*signed_page=*/false);
     }
-    // Page maps.  Deprecated by [MS-PST] but still expected to exist; mark
-    // everything allocated so no reader tries to reuse the space.
+
+    // Page maps, derived from the allocation maps: a 512-byte page counts as
+    // allocated when any of the eight 64-byte slots inside it is.
+    pmap_free_ = 0;
     for (std::uint64_t ib = kFirstPMapPos; ib < cursor_; ib += kPMapSpan) {
-        std::vector<std::uint8_t> body(496, 0xFF);
+        std::vector<std::uint8_t> body(496, 0);
+        for (std::size_t bit = 0; bit < 496 * 8; ++bit) {
+            const std::uint64_t page_ib = ib - kFirstPMapPos + bit * kPageSize;
+            bool used = page_ib >= cursor_;  // past the end: not available
+            if (!used && page_ib >= kFirstAMapPos) {
+                const std::size_t map =
+                    static_cast<std::size_t>((page_ib - kFirstAMapPos) / kAMapSpan);
+                if (map < amaps_.size()) {
+                    const std::uint64_t base = kFirstAMapPos + map * kAMapSpan;
+                    const std::uint64_t first = (page_ib - base) / kBlockAlign;
+                    for (int k = 0; k < 8; ++k) {
+                        const std::uint64_t s = first + k;
+                        if (s / 8 < amaps_[map].size() &&
+                            (amaps_[map][s / 8] & (0x80u >> (s % 8)))) {
+                            used = true;
+                            break;
+                        }
+                    }
+                } else {
+                    used = true;
+                }
+            } else if (!used) {
+                used = true;  // the header region
+            }
+            if (used) body[bit / 8] |= static_cast<std::uint8_t>(0x80u >> (bit % 8));
+            else pmap_free_ += kPageSize;
+        }
         write_page(ib, kPTypePMap, body, /*signed_page=*/false);
     }
 }
@@ -401,19 +462,10 @@ void NdbWriter::writeHeader(const Bref& nbt, const Bref& bbt) {
     poke32(root + 0, 0);                  // dwReserved
     poke64(root + 4, cursor_);            // ibFileEof
     poke64(root + 12, last_amap_ib_);     // ibAMapLast
-    // Outlook recomputes these and reports a mismatch; an unset value is not
-    // treated as "unknown".  Every PMap page is written fully allocated, so the
-    // free count there is genuinely zero.
-    std::uint64_t amap_free = 0;
-    for (const auto& bits : amaps_) {
-        for (std::uint8_t byte : bits) {
-            for (int b = 0; b < 8; ++b) {
-                if ((byte & (0x80u >> b)) == 0) amap_free += kBlockAlign;
-            }
-        }
-    }
-    poke64(root + 20, amap_free);         // cbAMapFree
-    poke64(root + 28, 0);                 // cbPMapFree
+    // Both totals are computed while the maps are written; a reader treats an
+    // unset value as "no free space", not as "unknown".
+    poke64(root + 20, amap_free_);        // cbAMapFree
+    poke64(root + 28, pmap_free_);        // cbPMapFree
     poke64(root + 36, nbt.bid);           // BREFNBT
     poke64(root + 44, nbt.ib);
     poke64(root + 52, bbt.bid);           // BREFBBT
