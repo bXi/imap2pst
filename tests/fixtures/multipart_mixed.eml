@@ -1,0 +1,27 @@
+From: Sender <sender@example.com>
+To: Recipient <rcpt@example.com>
+Subject: With attachments
+Date: Thu, 16 Nov 2023 12:34:56 -0500
+Message-ID: <mixed-003@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="BOUND1"
+
+--BOUND1
+Content-Type: text/plain; charset=utf-8
+
+Please find two files attached.
+
+--BOUND1
+Content-Type: application/octet-stream; name="data.bin"
+Content-Disposition: attachment; filename="data.bin"
+Content-Transfer-Encoding: base64
+
+UERGLWlzaCBiaW5hcnkgAAEC/yBwYXlsb2FkIGZvciB0aGUgYXR0YWNobWVudCB0ZXN0
+--BOUND1
+Content-Type: text/csv; name="table.csv"
+Content-Disposition: attachment; filename="table.csv"
+
+a,b,c
+1,2,3
+
+--BOUND1--

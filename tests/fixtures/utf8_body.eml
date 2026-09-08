@@ -1,0 +1,10 @@
+From: "日本語 テスト" <jp@example.jp>
+To: dest@example.jp
+Subject: =?utf-8?B?44OG44K544OI5Lu25ZCN?=
+Date: Sat, 18 Nov 2023 03:04:05 +0900
+Message-ID: <utf8-005@example.jp>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+こんにちは、世界。

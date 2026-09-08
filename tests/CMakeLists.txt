@@ -13,6 +13,13 @@ target_link_libraries(imap2pst_tests PRIVATE
   imap2pst_pst imap2pst_test_support GTest::gtest_main)
 gtest_discover_tests(imap2pst_tests)
 
+if(IMAP2PST_WITH_MIME)
+  add_executable(imap2pst_mime_tests test_mime.cpp)
+  target_link_libraries(imap2pst_mime_tests PRIVATE
+    imap2pst_mime imap2pst_test_support GTest::gtest_main)
+  gtest_discover_tests(imap2pst_mime_tests)
+endif()
+
 # --- libpff round-trip -------------------------------------------------------
 # The C++ side writes a PST plus a manifest; a Python script reads it back with
 # pypff and compares.  pypff is a test-environment prerequisite only, never a

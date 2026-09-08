@@ -1,0 +1,8 @@
+From: News <news@example.org>
+To: subscriber@example.net
+Subject: HTML only newsletter
+Date: Wed, 15 Nov 2023 08:00:00 +0100
+Message-ID: <html-002@example.org>
+Content-Type: text/html; charset=utf-8
+
+<html><body><h1>Headline</h1><p>Body &amp; more.</p></body></html>
