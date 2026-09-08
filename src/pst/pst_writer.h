@@ -64,6 +64,11 @@ class PstWriter {
     void writeFolders();
     void applyHeaderProperties(PropertyContext& pc, const Message& msg);
 
+    // The column sets Outlook requires each kind of folder table to declare.
+    static std::vector<PropTag> contentsColumns();
+    static std::vector<PropTag> hierarchyColumns();
+    static std::vector<PropTag> associatedColumns();
+
     NdbWriter ndb_;
     NameIdMap names_;
     std::vector<Folder> folders_;

@@ -124,6 +124,10 @@ std::vector<std::uint8_t> PropertyContext::serialize(SubnodeAllocator& subs) con
         std::uint32_t hnid;
         if (v.kind == Value::Kind::kInline || v.kind == Value::Kind::kSpilled) {
             hnid = v.hnid;
+        } else if (v.bytes.empty()) {
+            // An empty variable-length value is HNID zero.  Allocating a
+            // zero-length heap item instead would read back as a freed slot.
+            hnid = 0;
         } else if (v.bytes.size() <= HeapNode::maxAllocSize()) {
             hnid = hn.alloc(v.bytes);
         } else {

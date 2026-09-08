@@ -401,7 +401,18 @@ void NdbWriter::writeHeader(const Bref& nbt, const Bref& bbt) {
     poke32(root + 0, 0);                  // dwReserved
     poke64(root + 4, cursor_);            // ibFileEof
     poke64(root + 12, last_amap_ib_);     // ibAMapLast
-    poke64(root + 20, 0);                 // cbAMapFree
+    // Outlook recomputes these and reports a mismatch; an unset value is not
+    // treated as "unknown".  Every PMap page is written fully allocated, so the
+    // free count there is genuinely zero.
+    std::uint64_t amap_free = 0;
+    for (const auto& bits : amaps_) {
+        for (std::uint8_t byte : bits) {
+            for (int b = 0; b < 8; ++b) {
+                if ((byte & (0x80u >> b)) == 0) amap_free += kBlockAlign;
+            }
+        }
+    }
+    poke64(root + 20, amap_free);         // cbAMapFree
     poke64(root + 28, 0);                 // cbPMapFree
     poke64(root + 36, nbt.bid);           // BREFNBT
     poke64(root + 44, nbt.ib);

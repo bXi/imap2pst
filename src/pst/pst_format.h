@@ -148,6 +148,7 @@ enum PropType : std::uint16_t {
     kPtSystime     = 0x0040,
     kPtGuid        = 0x0048,
     kPtBinary      = 0x0102,
+    kPtMvLong      = 0x1003,
     kPtMvUnicode   = 0x101F,
     kPtMvBinary    = 0x1102,
 };

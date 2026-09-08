@@ -297,6 +297,55 @@ TEST(PstHeader, NidHighWaterMarksClearTheReservedRange) {
     }
 }
 
+TEST(PstHeap, NoZeroLengthAllocationsAndCFreeCountsThem) {
+    // cFree is the number of freed allocation slots, not the number of free
+    // bytes.  Outlook counts zero-length rgibAlloc entries and rejects the
+    // whole heap when the stored value disagrees, which silently makes every
+    // property in that node unreadable.
+    TempPst tmp;
+    writeSample(tmp.path(), 30);
+    const Reader r(readAll(tmp.path()));
+
+    std::size_t heaps = 0;
+    for (const auto& blk : r.blocks()) {
+        if (blk.cb < 12) continue;
+        const std::uint8_t* p = r.at(blk.ib);
+        if (p[2] != kHnSignature) continue;  // not an HN first block
+        const std::uint16_t ibHnpm = peek16(p);
+        if (ibHnpm + 4u > blk.cb) continue;
+        const std::uint16_t alloc_count = peek16(p + ibHnpm);
+        const std::uint16_t free_count = peek16(p + ibHnpm + 2);
+        std::uint16_t zero_length = 0;
+        for (std::uint16_t i = 0; i < alloc_count; ++i) {
+            const std::uint16_t a = peek16(p + ibHnpm + 4 + 2 * i);
+            const std::uint16_t b = peek16(p + ibHnpm + 6 + 2 * i);
+            if (a == b) ++zero_length;
+        }
+        EXPECT_EQ(zero_length, 0) << "zero-length heap allocation at 0x" << std::hex << blk.ib;
+        EXPECT_EQ(free_count, zero_length) << "cFree disagrees at 0x" << std::hex << blk.ib;
+        ++heaps;
+    }
+    EXPECT_GT(heaps, 10u) << "expected to have inspected a good number of heaps";
+}
+
+TEST(PstHeader, AMapFreeSpaceIsPublished) {
+    TempPst tmp;
+    writeSample(tmp.path(), 30);
+    const Reader r(readAll(tmp.path()));
+
+    // Count the free 64-byte units the allocation maps actually describe.
+    std::uint64_t expected = 0;
+    for (std::uint64_t base = kFirstAMapPos; base < r.size(); base += kAMapSpan) {
+        for (std::size_t i = 0; i < 496; ++i) {
+            const std::uint8_t byte = *r.at(base + i);
+            for (int b = 0; b < 8; ++b) {
+                if ((byte & (0x80u >> b)) == 0) expected += kBlockAlign;
+            }
+        }
+    }
+    EXPECT_EQ(peek64(r.at(180 + 20)), expected) << "ROOT.cbAMapFree";
+}
+
 TEST(PstNodes, ReservedNodesArePresent) {
     TempPst tmp;
     writeSample(tmp.path(), 5);

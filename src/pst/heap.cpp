@@ -160,7 +160,15 @@ std::vector<std::uint8_t> HeapNode::serialize() const {
 
         std::uint8_t* pm = blk.data() + ibHnpm;
         poke16(pm, static_cast<std::uint16_t>(b.items.size()));       // cAlloc
-        poke16(pm + 2, static_cast<std::uint16_t>(free_bytes));       // cFree
+        // cFree is the number of freed allocation slots, not the number of
+        // free bytes.  Outlook counts zero-length entries in rgibAlloc and
+        // rejects the whole heap when the stored value disagrees, which makes
+        // every property in the node unreadable.
+        std::uint16_t freed = 0;
+        for (const auto& item : b.items) {
+            if (item.empty()) ++freed;
+        }
+        poke16(pm + 2, freed);
         for (std::size_t k = 0; k < offsets.size(); ++k) {
             poke16(pm + 4 + 2 * k, offsets[k]);
         }

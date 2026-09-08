@@ -88,6 +88,40 @@ inline constexpr PropTag PR_ATTACH_MIME_TAG        = makeTag(0x370E, kPtUnicode)
 inline constexpr PropTag PR_ATTACH_CONTENT_ID      = makeTag(0x3712, kPtUnicode);
 inline constexpr PropTag PR_ATTACH_FLAGS           = makeTag(0x3714, kPtLong);
 
+// --------------------------------------------- columns Outlook requires
+// Outlook validates that a folder's tables declare a fixed set of columns and
+// reports every absent one, even when no row would carry a value.  Declaring a
+// column costs a few bytes of row width; the cell-existence bitmap still marks
+// it absent per row.
+inline constexpr PropTag PR_IMPORTANCE              = makeTag(0x0017, kPtLong);
+inline constexpr PropTag PR_SENSITIVITY             = makeTag(0x0036, kPtLong);
+inline constexpr PropTag PR_MESSAGE_TO_ME           = makeTag(0x0057, kPtBoolean);
+inline constexpr PropTag PR_MESSAGE_CC_ME           = makeTag(0x0058, kPtBoolean);
+inline constexpr PropTag PR_CONVERSATION_INDEX      = makeTag(0x0071, kPtBinary);
+inline constexpr PropTag PR_MESSAGE_STATUS          = makeTag(0x0E17, kPtLong);
+inline constexpr PropTag PR_REPL_ITEMID             = makeTag(0x0E30, kPtBinary);
+inline constexpr PropTag PR_REPL_CHANGENUM          = makeTag(0x0E33, kPtLongLong);
+inline constexpr PropTag PR_REPL_VERSION_HISTORY    = makeTag(0x0E34, kPtBinary);
+inline constexpr PropTag PR_REPL_FLAGS              = makeTag(0x0E38, kPtLong);
+inline constexpr PropTag PR_REPL_COPIEDFROM_VERSION = makeTag(0x0E3C, kPtBinary);
+inline constexpr PropTag PR_REPL_COPIEDFROM_ITEMID  = makeTag(0x0E3D, kPtBinary);
+inline constexpr PropTag PR_ITEM_TEMPORARY_FLAGS    = makeTag(0x1097, kPtLong);
+inline constexpr PropTag PR_CONVERSATION_ID         = makeTag(0x3013, kPtBinary);
+inline constexpr PropTag PR_SECURE_SUBMIT_FLAGS     = makeTag(0x65C6, kPtLong);
+inline constexpr PropTag PR_PST_HIDDEN_COUNT        = makeTag(0x6635, kPtLong);
+inline constexpr PropTag PR_PST_HIDDEN_UNREAD       = makeTag(0x6636, kPtLong);
+inline constexpr PropTag PR_SEARCH_KEY              = makeTag(0x300B, kPtBinary);
+// Associated-contents (FAI) tables carry the view-descriptor columns.
+inline constexpr PropTag PR_VD_NAME                 = makeTag(0x6800, kPtUnicode);
+inline constexpr PropTag PR_VD_FLAGS                = makeTag(0x6803, kPtBoolean);
+inline constexpr PropTag PR_VD_VERSION              = makeTag(0x6805, kPtMvLong);
+inline constexpr PropTag PR_VD_STRINGS              = makeTag(0x682F, kPtUnicode);
+inline constexpr PropTag PR_VIEW_DESCRIPTOR_FLAGS   = makeTag(0x7003, kPtLong);
+inline constexpr PropTag PR_VIEW_DESCRIPTOR_LINKTO  = makeTag(0x7004, kPtBinary);
+inline constexpr PropTag PR_VIEW_DESCRIPTOR_VIEWFLD = makeTag(0x7005, kPtBinary);
+inline constexpr PropTag PR_VIEW_DESCRIPTOR_NAME    = makeTag(0x7006, kPtUnicode);
+inline constexpr PropTag PR_VIEW_DESCRIPTOR_VERSION = makeTag(0x7007, kPtLong);
+
 // ------------------------------------------------------- LTP internal props
 // Every table context carries these two as its first two columns.
 inline constexpr PropTag PidTagLtpRowId            = makeTag(0x67F2, kPtLong);

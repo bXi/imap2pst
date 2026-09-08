@@ -66,16 +66,41 @@ PstWriter::Folder& PstWriter::folder(FolderId id) {
     throw PstError("unknown folder id " + std::to_string(id));
 }
 
+std::vector<PropTag> PstWriter::contentsColumns() {
+    return {PR_SUBJECT,        PR_SENDER_NAME,    PR_DISPLAY_TO,
+            PR_MESSAGE_CLASS,  PR_MESSAGE_DELIVERY_TIME, PR_MESSAGE_FLAGS,
+            PR_MESSAGE_SIZE,   PR_HASATTACH,      PR_IMPORTANCE,
+            PR_SENSITIVITY,    PR_CLIENT_SUBMIT_TIME, PR_SENT_REPRESENTING_NAME,
+            PR_MESSAGE_TO_ME,  PR_MESSAGE_CC_ME,  PR_CONVERSATION_TOPIC,
+            PR_CONVERSATION_INDEX, PR_DISPLAY_CC, PR_MESSAGE_STATUS,
+            PR_REPL_ITEMID,    PR_REPL_CHANGENUM, PR_REPL_VERSION_HISTORY,
+            PR_REPL_FLAGS,     PR_REPL_COPIEDFROM_VERSION,
+            PR_REPL_COPIEDFROM_ITEMID, PR_ITEM_TEMPORARY_FLAGS,
+            PR_LAST_MODIFICATION_TIME, PR_CONVERSATION_ID,
+            PR_SECURE_SUBMIT_FLAGS};
+}
+
+std::vector<PropTag> PstWriter::hierarchyColumns() {
+    return {PR_DISPLAY_NAME,  PR_CONTENT_COUNT, PR_CONTENT_UNREAD,
+            PR_SUBFOLDERS,    PR_CONTAINER_CLASS, PR_REPL_ITEMID,
+            PR_REPL_CHANGENUM, PR_REPL_VERSION_HISTORY, PR_REPL_FLAGS,
+            PR_PST_HIDDEN_COUNT, PR_PST_HIDDEN_UNREAD};
+}
+
+std::vector<PropTag> PstWriter::associatedColumns() {
+    return {PR_MESSAGE_CLASS, PR_DISPLAY_NAME, PR_VD_NAME, PR_VD_FLAGS,
+            PR_VD_VERSION,    PR_VD_STRINGS,   PR_VIEW_DESCRIPTOR_FLAGS,
+            PR_VIEW_DESCRIPTOR_LINKTO, PR_VIEW_DESCRIPTOR_VIEWFLD,
+            PR_VIEW_DESCRIPTOR_NAME,   PR_VIEW_DESCRIPTOR_VERSION};
+}
+
 FolderId PstWriter::makeFolder(Nid parent, const std::string& name, Nid forced_nid) {
     Folder f;
     f.nid = forced_nid ? forced_nid
                        : makeNid(kNidTypeNormalFolder, next_folder_index_++);
     f.parent = parent;
     f.name = name;
-    f.contents = std::make_unique<TableContextWriter>(
-        ndb_, std::vector<PropTag>{PR_SUBJECT, PR_SENDER_NAME, PR_DISPLAY_TO,
-                                   PR_MESSAGE_CLASS, PR_MESSAGE_DELIVERY_TIME,
-                                   PR_MESSAGE_FLAGS, PR_MESSAGE_SIZE, PR_HASATTACH});
+    f.contents = std::make_unique<TableContextWriter>(ndb_, contentsColumns());
     folders_.push_back(std::move(f));
 
     if (parent) {
@@ -192,6 +217,15 @@ void PstWriter::addMessage(FolderId folder_id, const Message& msg) {
     if (!msg.message_id.empty()) pc.setString(PR_INTERNET_MESSAGE_ID, msg.message_id);
     if (!msg.in_reply_to.empty()) pc.setString(PR_IN_REPLY_TO_ID, msg.in_reply_to);
     pc.setBinary(PR_ENTRYID, entryId(nid));
+    // Outlook requires a search key on every message; it only has to be a
+    // stable 16-byte value that is unique within the store.
+    {
+        std::vector<std::uint8_t> key(store_guid_, store_guid_ + 16);
+        for (int i = 0; i < 4; ++i) {
+            key[12 + i] ^= static_cast<std::uint8_t>(nid >> (8 * i));
+        }
+        pc.setBinary(PR_SEARCH_KEY, key);
+    }
 
     applyHeaderProperties(pc, msg);
 
@@ -354,11 +388,7 @@ void PstWriter::writeFolders() {
         // Hierarchy table: one row per child folder.
         {
             TableContext ht;
-            ht.addColumn(PR_DISPLAY_NAME);
-            ht.addColumn(PR_CONTENT_COUNT);
-            ht.addColumn(PR_CONTENT_UNREAD);
-            ht.addColumn(PR_SUBFOLDERS);
-            ht.addColumn(PR_CONTAINER_CLASS);
+            for (PropTag tag : hierarchyColumns()) ht.addColumn(tag);
             for (Nid child_nid : f.children) {
                 const Folder& c = folder(child_nid);
                 const std::size_t r = ht.addRow(c.nid);
@@ -386,7 +416,7 @@ void PstWriter::writeFolders() {
         // Associated contents table: structurally present but always empty.
         {
             TableContext fai;
-            fai.addColumn(PR_MESSAGE_CLASS);
+            for (PropTag tag : associatedColumns()) fai.addColumn(tag);
             SubnodeAllocator subs(ndb_);
             const auto heap = fai.serialize(subs);
             writeNodeFromHeap(makeNid(kNidTypeAssocContentsTable, nidIndex(f.nid)),
