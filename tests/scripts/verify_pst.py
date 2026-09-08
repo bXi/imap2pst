@@ -176,6 +176,23 @@ def main(argv):
             verify_message(folder, spec)
             checked += 1
 
+        for spec in manifest.get("folder_counts", []):
+            folder = resolve(root, spec["folder"])
+            check(folder.number_of_sub_messages == spec["count"],
+                  "folder %r holds %d message(s), expected %d"
+                  % (spec["folder"], folder.number_of_sub_messages, spec["count"]))
+            subjects = [folder.get_sub_message(i).subject
+                        for i in range(folder.number_of_sub_messages)]
+            check(subjects[0] == spec["first_subject"],
+                  "first message of %r is %r, expected %r"
+                  % (spec["folder"], subjects[0], spec["first_subject"]))
+            check(subjects[-1] == spec["last_subject"],
+                  "last message of %r is %r, expected %r"
+                  % (spec["folder"], subjects[-1], spec["last_subject"]))
+            check(len(set(subjects)) == len(subjects),
+                  "folder %r has duplicate subjects" % spec["folder"])
+            checked += len(subjects)
+
         named = verify_named_properties(pff_file, manifest["named_properties"])
     except Failure as failure:
         sys.stderr.write("FAIL: %s\n" % failure)

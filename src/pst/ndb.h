@@ -44,6 +44,13 @@ class NdbWriter {
     Bid writeData(const void* data, std::size_t len);
     Bid writeData(const std::vector<std::uint8_t>& v) { return writeData(v.data(), v.size()); }
 
+    // The two halves of writeData, exposed so callers that produce their data
+    // incrementally can hand over one chunk at a time and never hold the whole
+    // stream in memory.  Chunks must be exactly kMaxBlockData bytes except the
+    // last.  assembleDataTree() takes the leaf BIDs in stream order.
+    Bid writeLeafChunk(const void* data, std::size_t len);
+    Bid assembleDataTree(const std::vector<Bid>& leaves, std::uint64_t total_bytes);
+
     // Stores a subnode B-tree.  Returns 0 for an empty entry list, which is the
     // encoding for "this node has no subnodes".
     Bid writeSubnodes(std::vector<SubnodeEntry> entries);
@@ -88,15 +95,27 @@ class NdbWriter {
                    std::uint32_t total_bytes);
 
     // --- b-tree construction ------------------------------------------------
-    struct RawEntry {
+    // Leaf entries are serialized straight out of the POD bbt_/nbt_ vectors by
+    // a callback, so a mailbox-sized tree never materializes a second copy of
+    // every entry just to build its pages.
+    struct BranchEntry {
         std::uint64_t key;
-        std::vector<std::uint8_t> bytes;
+        Bid bid;
+        std::uint64_t ib;
     };
-    Bref buildBTree(std::uint8_t page_type, std::vector<RawEntry> entries,
-                    std::uint8_t entry_size);
-    Bref emitBTPage(const std::vector<RawEntry>& entries, std::size_t first,
-                    std::size_t count, std::uint8_t entry_size,
-                    std::uint8_t level, std::uint8_t page_type);
+    using KeyFn = std::uint64_t (*)(const void* base, std::size_t index);
+    using EntryFn = void (*)(const void* base, std::size_t index, std::uint8_t* dst);
+
+    Bref buildBTree(std::uint8_t page_type, std::uint8_t entry_size,
+                    std::size_t count, const void* base, KeyFn key_of,
+                    EntryFn write_entry);
+    Bref emitLeafPage(std::uint8_t page_type, std::uint8_t entry_size,
+                      const void* base, std::size_t first, std::size_t count,
+                      EntryFn write_entry);
+    Bref emitBranchPage(std::uint8_t page_type, const std::vector<BranchEntry>& entries,
+                        std::size_t first, std::size_t count, std::uint8_t level);
+    Bref finishBTPage(std::vector<std::uint8_t>& page, std::uint8_t page_type,
+                      std::uint8_t entry_size, std::size_t count, std::uint8_t level);
     void emitFixedPages();
     void writeHeader(const Bref& nbt, const Bref& bbt);
 

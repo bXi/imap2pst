@@ -149,17 +149,16 @@ Bid NdbWriter::emitXBlock(const std::vector<Bid>& children, std::uint8_t level,
     return emitBlock(buf.data(), buf.size(), /*internal=*/true);
 }
 
-Bid NdbWriter::writeData(const void* data, std::size_t len) {
-    const auto* p = static_cast<const std::uint8_t*>(data);
-    if (len <= kMaxBlockData) return emitBlock(p, len, /*internal=*/false);
-    if (len > 0xFFFFFFFFull) throw PstError("data tree larger than 4 GiB");
+Bid NdbWriter::writeLeafChunk(const void* data, std::size_t len) {
+    return emitBlock(data, len, /*internal=*/false);
+}
 
-    std::vector<Bid> leaves;
-    for (std::size_t off = 0; off < len; off += kMaxBlockData) {
-        const std::size_t n = std::min<std::size_t>(kMaxBlockData, len - off);
-        leaves.push_back(emitBlock(p + off, n, /*internal=*/false));
-    }
-    const auto total = static_cast<std::uint32_t>(len);
+Bid NdbWriter::assembleDataTree(const std::vector<Bid>& leaves,
+                                std::uint64_t total_bytes) {
+    if (leaves.empty()) return emitBlock(nullptr, 0, /*internal=*/false);
+    if (leaves.size() == 1) return leaves.front();
+    if (total_bytes > 0xFFFFFFFFull) throw PstError("data tree larger than 4 GiB");
+    const auto total = static_cast<std::uint32_t>(total_bytes);
 
     if (leaves.size() <= kXBlockFanout) return emitXBlock(leaves, 1, total);
 
@@ -170,13 +169,26 @@ Bid NdbWriter::writeData(const void* data, std::size_t len) {
                                leaves.begin() + static_cast<long>(i + n));
         // Every child XBLOCK except the last is completely full.
         const auto covered = static_cast<std::uint32_t>(
-            std::min<std::size_t>(n * kMaxBlockData, len - i * kMaxBlockData));
+            std::min<std::uint64_t>(n * kMaxBlockData, total_bytes - i * kMaxBlockData));
         xblocks.push_back(emitXBlock(slice, 1, covered));
     }
     if (xblocks.size() > kXBlockFanout) {
         throw PstError("data tree needs more than two levels; not supported");
     }
     return emitXBlock(xblocks, 2, total);
+}
+
+Bid NdbWriter::writeData(const void* data, std::size_t len) {
+    const auto* p = static_cast<const std::uint8_t*>(data);
+    if (len <= kMaxBlockData) return emitBlock(p, len, /*internal=*/false);
+
+    std::vector<Bid> leaves;
+    leaves.reserve((len + kMaxBlockData - 1) / kMaxBlockData);
+    for (std::size_t off = 0; off < len; off += kMaxBlockData) {
+        const std::size_t n = std::min<std::size_t>(kMaxBlockData, len - off);
+        leaves.push_back(writeLeafChunk(p + off, n));
+    }
+    return assembleDataTree(leaves, len);
 }
 
 Bid NdbWriter::writeSubnodes(std::vector<SubnodeEntry> entries) {
@@ -227,16 +239,33 @@ void NdbWriter::addNode(Nid nid, Bid data, Bid sub, Nid parent) {
 
 // ------------------------------------------------------------------ b-trees
 
-NdbWriter::Bref NdbWriter::emitBTPage(const std::vector<RawEntry>& entries,
-                                      std::size_t first, std::size_t count,
-                                      std::uint8_t entry_size, std::uint8_t level,
-                                      std::uint8_t page_type) {
+NdbWriter::Bref NdbWriter::emitLeafPage(std::uint8_t page_type, std::uint8_t entry_size,
+                                        const void* base, std::size_t first,
+                                        std::size_t count, EntryFn write_entry) {
     std::vector<std::uint8_t> page(kPageSize, 0);
-    std::size_t off = 0;
-    for (std::size_t i = first; i < first + count; ++i) {
-        std::memcpy(page.data() + off, entries[i].bytes.data(), entry_size);
-        off += entry_size;
+    for (std::size_t i = 0; i < count; ++i) {
+        write_entry(base, first + i, page.data() + i * entry_size);
     }
+    return finishBTPage(page, page_type, entry_size, count, 0);
+}
+
+NdbWriter::Bref NdbWriter::emitBranchPage(std::uint8_t page_type,
+                                          const std::vector<BranchEntry>& entries,
+                                          std::size_t first, std::size_t count,
+                                          std::uint8_t level) {
+    std::vector<std::uint8_t> page(kPageSize, 0);
+    for (std::size_t i = 0; i < count; ++i) {
+        std::uint8_t* e = page.data() + i * kSizeBTEntry;
+        poke64(e, entries[first + i].key);
+        poke64(e + 8, entries[first + i].bid);
+        poke64(e + 16, entries[first + i].ib);
+    }
+    return finishBTPage(page, page_type, kSizeBTEntry, count, level);
+}
+
+NdbWriter::Bref NdbWriter::finishBTPage(std::vector<std::uint8_t>& page,
+                                        std::uint8_t page_type, std::uint8_t entry_size,
+                                        std::size_t count, std::uint8_t level) {
     page[488] = static_cast<std::uint8_t>(count);
     page[489] = static_cast<std::uint8_t>(entriesPerPage(entry_size));
     page[490] = entry_size;
@@ -256,53 +285,39 @@ NdbWriter::Bref NdbWriter::emitBTPage(const std::vector<RawEntry>& entries,
     return Bref{bid, ib};
 }
 
-NdbWriter::Bref NdbWriter::buildBTree(std::uint8_t page_type,
-                                      std::vector<RawEntry> entries,
-                                      std::uint8_t entry_size) {
-    std::sort(entries.begin(), entries.end(),
-              [](const RawEntry& a, const RawEntry& b) { return a.key < b.key; });
-
+NdbWriter::Bref NdbWriter::buildBTree(std::uint8_t page_type, std::uint8_t entry_size,
+                                      std::size_t count, const void* base,
+                                      KeyFn key_of, EntryFn write_entry) {
     // An empty tree is still one (empty) leaf page: readers expect a root.
-    if (entries.empty()) {
-        return emitBTPage(entries, 0, 0, entry_size, 0, page_type);
+    if (count == 0) {
+        return emitLeafPage(page_type, entry_size, base, 0, 0, write_entry);
     }
 
-    std::vector<RawEntry> level_entries;
+    std::vector<BranchEntry> level_entries;
     const std::size_t per_leaf = entriesPerPage(entry_size);
-    for (std::size_t i = 0; i < entries.size(); i += per_leaf) {
-        const std::size_t n = std::min(per_leaf, entries.size() - i);
-        const Bref child = emitBTPage(entries, i, n, entry_size, 0, page_type);
-        RawEntry e;
-        e.key = entries[i].key;
-        put64(e.bytes, e.key);        // BTENTRY.btkey
-        put64(e.bytes, child.bid);    // BTENTRY.BREF.bid
-        put64(e.bytes, child.ib);     // BTENTRY.BREF.ib
-        level_entries.push_back(std::move(e));
+    level_entries.reserve((count + per_leaf - 1) / per_leaf);
+    for (std::size_t i = 0; i < count; i += per_leaf) {
+        const std::size_t n = std::min(per_leaf, count - i);
+        const Bref child = emitLeafPage(page_type, entry_size, base, i, n, write_entry);
+        level_entries.push_back({key_of(base, i), child.bid, child.ib});
     }
 
     std::uint8_t level = 1;
     const std::size_t per_branch = entriesPerPage(kSizeBTEntry);
     while (level_entries.size() > 1) {
-        std::vector<RawEntry> next;
+        std::vector<BranchEntry> next;
+        next.reserve((level_entries.size() + per_branch - 1) / per_branch);
         for (std::size_t i = 0; i < level_entries.size(); i += per_branch) {
             const std::size_t n = std::min(per_branch, level_entries.size() - i);
-            const Bref child =
-                emitBTPage(level_entries, i, n, kSizeBTEntry, level, page_type);
-            RawEntry e;
-            e.key = level_entries[i].key;
-            put64(e.bytes, e.key);
-            put64(e.bytes, child.bid);
-            put64(e.bytes, child.ib);
-            next.push_back(std::move(e));
+            const Bref child = emitBranchPage(page_type, level_entries, i, n, level);
+            next.push_back({level_entries[i].key, child.bid, child.ib});
         }
         level_entries = std::move(next);
         ++level;
         if (level > 8) throw PstError("B-tree grew beyond 8 levels");
     }
 
-    // The root's BREF is embedded in the single remaining entry.
-    const std::uint8_t* p = level_entries.front().bytes.data();
-    return Bref{peek64(p + 8), peek64(p + 16)};
+    return Bref{level_entries.front().bid, level_entries.front().ib};
 }
 
 // ------------------------------------------------------------- fixed pages
@@ -406,37 +421,41 @@ void NdbWriter::finish() {
     if (finished_) return;
     finished_ = true;
 
-    std::vector<RawEntry> bbt_entries;
-    bbt_entries.reserve(bbt_.size());
-    for (const auto& e : bbt_) {
-        RawEntry r;
-        r.key = e.bid;
-        put64(r.bytes, e.bid);
-        put64(r.bytes, e.ib);
-        put16(r.bytes, e.cb);
-        put16(r.bytes, 2);  // cRef: one reference plus the implicit one
-        put32(r.bytes, 0);  // dwPadding
-        bbt_entries.push_back(std::move(r));
-    }
+    std::sort(bbt_.begin(), bbt_.end(),
+              [](const BbtEntry& a, const BbtEntry& b) { return a.bid < b.bid; });
+    std::sort(nbt_.begin(), nbt_.end(),
+              [](const NbtEntry& a, const NbtEntry& b) { return a.nid < b.nid; });
 
-    std::vector<RawEntry> nbt_entries;
-    nbt_entries.reserve(nbt_.size());
-    for (const auto& e : nbt_) {
-        RawEntry r;
-        r.key = e.nid;
-        put64(r.bytes, e.nid);
-        put64(r.bytes, e.data);
-        put64(r.bytes, e.sub);
-        put32(r.bytes, e.parent);
-        put32(r.bytes, 0);  // dwPadding
-        nbt_entries.push_back(std::move(r));
-    }
-
-    // The NBT is built first so that its pages are already accounted for in the
+    // The NBT is built first so its pages are already accounted for in the
     // allocation maps before the BBT pages are laid out.  Neither tree indexes
     // pages, so building them does not feed back into their own contents.
-    const Bref nbt_root = buildBTree(kPTypeNBT, std::move(nbt_entries), kSizeNBTEntry);
-    const Bref bbt_root = buildBTree(kPTypeBBT, std::move(bbt_entries), kSizeBBTEntry);
+    const Bref nbt_root = buildBTree(
+        kPTypeNBT, kSizeNBTEntry, nbt_.size(), nbt_.data(),
+        [](const void* base, std::size_t i) -> std::uint64_t {
+            return static_cast<const NbtEntry*>(base)[i].nid;
+        },
+        [](const void* base, std::size_t i, std::uint8_t* dst) {
+            const NbtEntry& e = static_cast<const NbtEntry*>(base)[i];
+            poke64(dst, e.nid);
+            poke64(dst + 8, e.data);
+            poke64(dst + 16, e.sub);
+            poke32(dst + 24, e.parent);
+            poke32(dst + 28, 0);  // dwPadding
+        });
+
+    const Bref bbt_root = buildBTree(
+        kPTypeBBT, kSizeBBTEntry, bbt_.size(), bbt_.data(),
+        [](const void* base, std::size_t i) -> std::uint64_t {
+            return static_cast<const BbtEntry*>(base)[i].bid;
+        },
+        [](const void* base, std::size_t i, std::uint8_t* dst) {
+            const BbtEntry& e = static_cast<const BbtEntry*>(base)[i];
+            poke64(dst, e.bid);
+            poke64(dst + 8, e.ib);
+            poke16(dst + 16, e.cb);
+            poke16(dst + 18, 2);  // cRef: one reference plus the implicit one
+            poke32(dst + 20, 0);  // dwPadding
+        });
 
     emitFixedPages();
     writeHeader(nbt_root, bbt_root);

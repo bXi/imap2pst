@@ -55,9 +55,12 @@ std::uint64_t unixToFiletime(std::int64_t unix_seconds) {
 // ------------------------------------------------------------ SubnodeAllocator
 
 Nid SubnodeAllocator::spill(const void* data, std::size_t len) {
+    return adopt(ndb_.writeData(data, len));
+}
+
+Nid SubnodeAllocator::adopt(Bid data) {
     const Nid nid = makeNid(kNidTypeLtp, next_index_++);
-    const Bid bid = ndb_.writeData(data, len);
-    entries_.push_back({nid, bid, 0});
+    entries_.push_back({nid, data, 0});
     return nid;
 }
 
@@ -75,33 +78,36 @@ void PropertyContext::put(PropTag tag, Value v) {
 }
 
 void PropertyContext::setInt16(PropTag tag, std::uint16_t v) {
-    put(tag, Value{tag, true, v, {}});
+    put(tag, Value{tag, Value::Kind::kInline, v, {}});
 }
 void PropertyContext::setInt32(PropTag tag, std::uint32_t v) {
-    put(tag, Value{tag, true, v, {}});
+    put(tag, Value{tag, Value::Kind::kInline, v, {}});
 }
 void PropertyContext::setBool(PropTag tag, bool v) {
-    put(tag, Value{tag, true, v ? 1u : 0u, {}});
+    put(tag, Value{tag, Value::Kind::kInline, v ? 1u : 0u, {}});
+}
+void PropertyContext::setSpilledValue(PropTag tag, Nid nid) {
+    put(tag, Value{tag, Value::Kind::kSpilled, nid, {}});
 }
 void PropertyContext::setInt64(PropTag tag, std::uint64_t v) {
     std::vector<std::uint8_t> b;
     put64(b, v);
-    put(tag, Value{tag, false, 0, std::move(b)});
+    put(tag, Value{tag, Value::Kind::kBytes, 0, std::move(b)});
 }
 void PropertyContext::setTime(PropTag tag, std::uint64_t filetime) {
     setInt64(tag, filetime);
 }
 void PropertyContext::setString(PropTag tag, const std::string& utf8) {
     if (tagType(tag) == kPtString8) {
-        put(tag, Value{tag, false, 0,
+        put(tag, Value{tag, Value::Kind::kBytes, 0,
                        std::vector<std::uint8_t>(utf8.begin(), utf8.end())});
     } else {
-        put(tag, Value{tag, false, 0, utf8ToUtf16le(utf8)});
+        put(tag, Value{tag, Value::Kind::kBytes, 0, utf8ToUtf16le(utf8)});
     }
 }
 void PropertyContext::setBinary(PropTag tag, const void* data, std::size_t len) {
     const auto* p = static_cast<const std::uint8_t*>(data);
-    put(tag, Value{tag, false, 0, std::vector<std::uint8_t>(p, p + len)});
+    put(tag, Value{tag, Value::Kind::kBytes, 0, std::vector<std::uint8_t>(p, p + len)});
 }
 
 bool PropertyContext::has(PropTag tag) const {
@@ -116,8 +122,8 @@ std::vector<std::uint8_t> PropertyContext::serialize(SubnodeAllocator& subs) con
     records.reserve(values_.size());
     for (const auto& v : values_) {
         std::uint32_t hnid;
-        if (v.inlined) {
-            hnid = v.inline_value;
+        if (v.kind == Value::Kind::kInline || v.kind == Value::Kind::kSpilled) {
+            hnid = v.hnid;
         } else if (v.bytes.size() <= HeapNode::maxAllocSize()) {
             hnid = hn.alloc(v.bytes);
         } else {

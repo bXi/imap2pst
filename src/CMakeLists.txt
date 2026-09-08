@@ -4,6 +4,7 @@ add_library(imap2pst_pst STATIC
   pst/ndb.cpp
   pst/heap.cpp
   pst/ltp.cpp
+  pst/streaming_table.cpp
   pst/nameid_map.cpp
   pst/pst_writer.cpp
   core/message.cpp

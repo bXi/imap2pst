@@ -14,6 +14,7 @@
 #include "pst/ltp.h"
 #include "pst/ndb.h"
 #include "pst/nameid_map.h"
+#include "pst/streaming_table.h"
 
 namespace imap2pst::pst {
 
@@ -45,7 +46,11 @@ class PstWriter {
         Nid parent = 0;
         std::string name;
         std::vector<Nid> children;
-        std::unique_ptr<TableContext> contents;
+        // Streamed rather than buffered: a folder's contents table is the one
+        // structure here that scales with mailbox size, and holding it whole
+        // costs roughly a kilobyte per message until finish().
+        std::unique_ptr<TableContextWriter> contents;
+        std::size_t message_count = 0;
         std::uint32_t unread = 0;
     };
 

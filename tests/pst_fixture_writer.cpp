@@ -141,6 +141,17 @@ int main(int argc, char** argv) {
         writer.addMessage(unicode_folder, m);
         expected.push_back({"\xC3\x9C\x62\x65rsicht", m});
     }
+    // A folder big enough to force the streaming contents table across many
+    // heap blocks and several row-matrix blocks, so the round-trip covers the
+    // path that a real mailbox takes.
+    const auto bulk = writer.createFolder(writer.ipmSubtree(), "Bulk");
+    constexpr int kBulkCount = 3000;
+    for (int i = 0; i < kBulkCount; ++i) {
+        Message m = make("Bulk " + std::to_string(i),
+                         "Body of bulk message " + std::to_string(i), {},
+                         1700100000 + i);
+        writer.addMessage(bulk, m);
+    }
     writer.finish();
 
     std::ofstream js(json_path, std::ios::binary);
@@ -166,7 +177,11 @@ int main(int argc, char** argv) {
         }
         js << "]\n    }" << (i + 1 == expected.size() ? "\n" : ",\n");
     }
-    js << "  ],\n  \"named_properties\": [\"X-Fixture\", \"X-Sequence\"]\n}\n";
+    js << "  ],\n"
+       << "  \"folder_counts\": [{\"folder\": \"Bulk\", \"count\": " << kBulkCount
+       << ", \"first_subject\": \"Bulk 0\", \"last_subject\": \"Bulk "
+       << (kBulkCount - 1) << "\"}],\n"
+       << "  \"named_properties\": [\"X-Fixture\", \"X-Sequence\"]\n}\n";
     if (!js) {
         std::cerr << "failed writing manifest\n";
         return 1;

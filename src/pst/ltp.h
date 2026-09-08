@@ -32,6 +32,11 @@ class SubnodeAllocator {
     // Registers a subnode built elsewhere (a nested PC or TC).
     void add(Nid nid, Bid data, Bid sub) { entries_.push_back({nid, data, sub}); }
 
+    // Takes a data tree the caller has already written and gives it a NID.
+    // Streaming writers need this: they emit their blocks as they go and only
+    // have a root BID at the end, so there is nothing left to spill().
+    Nid adopt(Bid data);
+
     const std::vector<SubnodeEntry>& entries() const { return entries_; }
     NdbWriter& ndb() { return ndb_; }
 
@@ -56,6 +61,11 @@ class PropertyContext {
     void setBinary(PropTag tag, const std::vector<std::uint8_t>& v) {
         setBinary(tag, v.data(), v.size());
     }
+    // Records a value the caller has already written to a subnode.  Large
+    // payloads -- attachment bodies above all -- would otherwise be copied into
+    // the property context and held there until serialize(), doubling peak
+    // memory for the duration of the message.
+    void setSpilledValue(PropTag tag, Nid nid);
 
     bool has(PropTag tag) const;
     std::size_t size() const { return values_.size(); }
@@ -65,9 +75,13 @@ class PropertyContext {
 
  private:
     struct Value {
+        // kInline: the value fits in the record's 4-byte HNID field.
+        // kBytes:  serialize() places it in the heap or spills it.
+        // kSpilled: already in a subnode; `hnid` is its NID.
+        enum class Kind { kInline, kBytes, kSpilled };
         PropTag tag = 0;
-        bool inlined = false;
-        std::uint32_t inline_value = 0;
+        Kind kind = Kind::kBytes;
+        std::uint32_t hnid = 0;
         std::vector<std::uint8_t> bytes;
     };
     void put(PropTag tag, Value v);

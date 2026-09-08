@@ -72,15 +72,10 @@ FolderId PstWriter::makeFolder(Nid parent, const std::string& name, Nid forced_n
                        : makeNid(kNidTypeNormalFolder, next_folder_index_++);
     f.parent = parent;
     f.name = name;
-    f.contents = std::make_unique<TableContext>();
-    f.contents->addColumn(PR_SUBJECT);
-    f.contents->addColumn(PR_SENDER_NAME);
-    f.contents->addColumn(PR_DISPLAY_TO);
-    f.contents->addColumn(PR_MESSAGE_CLASS);
-    f.contents->addColumn(PR_MESSAGE_DELIVERY_TIME);
-    f.contents->addColumn(PR_MESSAGE_FLAGS);
-    f.contents->addColumn(PR_MESSAGE_SIZE);
-    f.contents->addColumn(PR_HASATTACH);
+    f.contents = std::make_unique<TableContextWriter>(
+        ndb_, std::vector<PropTag>{PR_SUBJECT, PR_SENDER_NAME, PR_DISPLAY_TO,
+                                   PR_MESSAGE_CLASS, PR_MESSAGE_DELIVERY_TIME,
+                                   PR_MESSAGE_FLAGS, PR_MESSAGE_SIZE, PR_HASATTACH});
     folders_.push_back(std::move(f));
 
     if (parent) {
@@ -262,7 +257,11 @@ void PstWriter::addMessage(FolderId folder_id, const Message& msg) {
             if (!a.content_type.empty()) apc.setString(PR_ATTACH_MIME_TAG, a.content_type);
             if (!a.content_id.empty()) apc.setString(PR_ATTACH_CONTENT_ID, a.content_id);
             apc.setInt32(PR_ATTACH_SIZE, static_cast<std::uint32_t>(a.data.size()));
-            apc.setBinary(PR_ATTACH_DATA_BIN, a.data);
+            // Written straight through to its own subnode rather than copied
+            // into the property context first: an attachment is the largest
+            // thing this writer handles and does not need to exist twice.
+            apc.setSpilledValue(PR_ATTACH_DATA_BIN,
+                                att_subs.spill(a.data.data(), a.data.size()));
 
             const auto aheap = apc.serialize(att_subs);
             const Bid adata = ndb_.writeData(aheap);
@@ -290,16 +289,18 @@ void PstWriter::addMessage(FolderId folder_id, const Message& msg) {
     writeNodeFromHeap(nid, folder_id, heap, subs);
 
     // ---- row in the parent folder's contents table ------------------------
-    const std::size_t row = f.contents->addRow(nid);
-    f.contents->setString(row, PR_SUBJECT, msg.subject);
-    f.contents->setString(row, PR_SENDER_NAME,
+    f.contents->beginRow(nid);
+    f.contents->setString(PR_SUBJECT, msg.subject);
+    f.contents->setString(PR_SENDER_NAME,
                           msg.from.name.empty() ? msg.from.email : msg.from.name);
-    f.contents->setString(row, PR_DISPLAY_TO, joinMailboxes(msg.to));
-    f.contents->setString(row, PR_MESSAGE_CLASS, "IPM.Note");
-    f.contents->setTime(row, PR_MESSAGE_DELIVERY_TIME, unixToFiletime(delivered));
-    f.contents->setInt32(row, PR_MESSAGE_FLAGS, flags);
-    f.contents->setInt32(row, PR_MESSAGE_SIZE, size);
-    f.contents->setBool(row, PR_HASATTACH, !msg.attachments.empty());
+    f.contents->setString(PR_DISPLAY_TO, joinMailboxes(msg.to));
+    f.contents->setString(PR_MESSAGE_CLASS, "IPM.Note");
+    f.contents->setTime(PR_MESSAGE_DELIVERY_TIME, unixToFiletime(delivered));
+    f.contents->setInt32(PR_MESSAGE_FLAGS, flags);
+    f.contents->setInt32(PR_MESSAGE_SIZE, size);
+    f.contents->setBool(PR_HASATTACH, !msg.attachments.empty());
+    f.contents->endRow();
+    ++f.message_count;
     if (!msg.seen()) ++f.unread;
 }
 
@@ -337,7 +338,7 @@ void PstWriter::writeFolders() {
             SubnodeAllocator subs(ndb_);
             PropertyContext pc;
             pc.setString(PR_DISPLAY_NAME, f.name);
-            pc.setInt32(PR_CONTENT_COUNT, static_cast<std::uint32_t>(f.contents->rowCount()));
+            pc.setInt32(PR_CONTENT_COUNT, static_cast<std::uint32_t>(f.message_count));
             pc.setInt32(PR_CONTENT_UNREAD, f.unread);
             pc.setBool(PR_SUBFOLDERS, !f.children.empty());
             pc.setString(PR_CONTAINER_CLASS, "IPF.Note");
@@ -360,7 +361,7 @@ void PstWriter::writeFolders() {
                 const std::size_t r = ht.addRow(c.nid);
                 ht.setString(r, PR_DISPLAY_NAME, c.name);
                 ht.setInt32(r, PR_CONTENT_COUNT,
-                            static_cast<std::uint32_t>(c.contents->rowCount()));
+                            static_cast<std::uint32_t>(c.message_count));
                 ht.setInt32(r, PR_CONTENT_UNREAD, c.unread);
                 ht.setBool(r, PR_SUBFOLDERS, !c.children.empty());
                 ht.setString(r, PR_CONTAINER_CLASS, "IPF.Note");
@@ -371,12 +372,12 @@ void PstWriter::writeFolders() {
                               heap, subs);
         }
 
-        // Contents table.
+        // Contents table.  Its blocks were emitted as messages arrived; this
+        // only closes it out and registers the node.
         {
-            SubnodeAllocator subs(ndb_);
-            const auto heap = f.contents->serialize(subs);
-            writeNodeFromHeap(makeNid(kNidTypeContentsTable, nidIndex(f.nid)), f.nid,
-                              heap, subs);
+            const auto node = f.contents->finish();
+            ndb_.addNode(makeNid(kNidTypeContentsTable, nidIndex(f.nid)), node.data,
+                         node.sub, f.nid);
         }
 
         // Associated contents table: structurally present but always empty.

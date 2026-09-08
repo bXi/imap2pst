@@ -196,6 +196,28 @@ TEST(PstAllocation, NothingOverlapsAReservedPage) {
     }
 }
 
+TEST(PstStreamingTable, LargeFolderStaysStructurallySound) {
+    TempPst tmp;
+    // Well past one heap block and one row-matrix block, so the contents table
+    // is written through the streaming path rather than buffered whole.
+    writeSample(tmp.path(), 5000);
+    const Reader r(readAll(tmp.path()));
+
+    EXPECT_EQ(r.ibFileEof(), r.size());
+    for (const auto& blk : r.blocks()) {
+        const std::uint64_t total = alignUp(blk.cb + 16u, kBlockAlign);
+        const std::uint8_t* t = r.at(blk.ib + total - 16);
+        ASSERT_EQ(peek32(t + 4), computeCrc(r.at(blk.ib), blk.cb))
+            << "bad block CRC at 0x" << std::hex << blk.ib;
+    }
+
+    std::size_t messages = 0;
+    for (Nid nid : r.nodes()) {
+        if (nidType(nid) == kNidTypeNormalMessage) ++messages;
+    }
+    EXPECT_EQ(messages, 5000u);
+}
+
 TEST(PstNodes, ReservedNodesArePresent) {
     TempPst tmp;
     writeSample(tmp.path(), 5);
