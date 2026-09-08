@@ -5,6 +5,7 @@ add_library(imap2pst_pst STATIC
   pst/heap.cpp
   pst/ltp.cpp
   pst/nameid_map.cpp
+  pst/pst_writer.cpp
   core/message.cpp
 )
 target_include_directories(imap2pst_pst PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
