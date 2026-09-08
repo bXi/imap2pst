@@ -107,6 +107,18 @@ class Reader {
         }
     }
 
+    void collectPages(const Bref& ref, std::vector<std::uint64_t>* out) const {
+        out->push_back(ref.ib);
+        const std::uint8_t* p = at(ref.ib);
+        const std::uint8_t count = p[488];
+        const std::uint8_t entry_size = p[490];
+        if (p[491] == 0) return;
+        for (std::uint8_t i = 0; i < count; ++i) {
+            const std::uint8_t* e = p + i * entry_size;
+            collectPages({peek64(e + 8), peek64(e + 16)}, out);
+        }
+    }
+
     std::vector<BlockRef> blocks() const {
         std::vector<std::vector<std::uint8_t>> leaves;
         walk(bbtRoot(), kPTypeBBT, 0, &leaves, nullptr);
@@ -114,6 +126,14 @@ class Reader {
         for (const auto& e : leaves) {
             out.push_back({peek64(e.data()), peek64(e.data() + 8), peek16(e.data() + 16)});
         }
+        return out;
+    }
+
+    // Every page of both B-trees, by file offset.
+    std::vector<std::uint64_t> btreePages() const {
+        std::vector<std::uint64_t> out;
+        collectPages(nbtRoot(), &out);
+        collectPages(bbtRoot(), &out);
         return out;
     }
 

@@ -70,8 +70,8 @@ class PstWriter {
     std::uint8_t store_guid_[16] = {};
     Nid root_folder_ = kNidRootFolder;
     Nid ipm_subtree_ = 0;
-    std::uint32_t next_folder_index_ = 16;
-    std::uint32_t next_message_index_ = 1;
+    std::uint32_t next_folder_index_ = kFirstUserNidIndex;
+    std::uint32_t next_message_index_ = kFirstUserNidIndex;
     bool finished_ = false;
 };
 

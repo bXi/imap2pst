@@ -74,6 +74,7 @@ inline constexpr PropTag PR_VIEWS_ENTRYID          = makeTag(0x35E5, kPtBinary);
 inline constexpr PropTag PR_COMMON_VIEWS_ENTRYID   = makeTag(0x35E6, kPtBinary);
 inline constexpr PropTag PR_FINDER_ENTRYID         = makeTag(0x35E7, kPtBinary);
 inline constexpr PropTag PR_STORE_RECORD_KEY       = makeTag(0x0FF9, kPtBinary);
+inline constexpr PropTag PR_PST_PASSWORD           = makeTag(0x67FF, kPtLong);
 
 // ------------------------------------------------------------- attachments
 inline constexpr PropTag PR_ATTACH_DATA_BIN        = makeTag(0x3701, kPtBinary);

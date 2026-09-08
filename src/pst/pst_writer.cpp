@@ -310,6 +310,9 @@ void PstWriter::writeMessageStore() {
     SubnodeAllocator subs(ndb_);
     PropertyContext pc;
     pc.setBinary(PR_RECORD_KEY, store_guid_, 16);
+    // Zero means "no password on this store".  Outlook reports the property as
+    // missing rather than defaulting it.
+    pc.setInt32(PR_PST_PASSWORD, 0);
     pc.setString(PR_DISPLAY_NAME, "Personal Folders");
     pc.setBinary(PR_IPM_SUBTREE_ENTRYID, entryId(ipm_subtree_));
     pc.setBinary(PR_IPM_WASTEBASKET_ENTRYID, entryId(ipm_subtree_));

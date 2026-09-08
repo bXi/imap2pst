@@ -323,11 +323,20 @@ NdbWriter::Bref NdbWriter::buildBTree(std::uint8_t page_type, std::uint8_t entry
 // ------------------------------------------------------------- fixed pages
 
 void NdbWriter::emitFixedPages() {
+    // [MS-PST] 2.2.2.7.2/2.2.2.7.3: an AMap or PMap page carries its own
+    // absolute file offset in pageTrailer.bid rather than a BID from the
+    // counter, and its wSig is zero.  The two go together -- the pages with no
+    // signature are exactly the pages whose BID is their offset.  Getting this
+    // wrong makes Outlook reject the allocation map, and from there it distrusts
+    // the whole file: it reports every B-tree page as unallocated, rebuilds both
+    // trees by scavenging, and then declares the message store and root folder
+    // missing even though they are present and readable.
     auto write_page = [&](std::uint64_t ib, std::uint8_t ptype,
                           const std::vector<std::uint8_t>& body, bool signed_page) {
         std::vector<std::uint8_t> page(kPageSize, 0);
         std::memcpy(page.data(), body.data(), std::min<std::size_t>(496, body.size()));
-        const Bid bid = makeBid(next_bid_index_++, /*internal=*/false);
+        const Bid bid = signed_page ? makeBid(next_bid_index_++, /*internal=*/false)
+                                    : static_cast<Bid>(ib);
         std::uint8_t* t = page.data() + 496;
         t[0] = ptype;
         t[1] = ptype;
@@ -371,15 +380,15 @@ void NdbWriter::writeHeader(const Bref& nbt, const Bref& bbt) {
     poke64(h.data() + 32, next_bid);   // bidNextP
     poke32(h.data() + 40, 1);          // dwUnique
 
-    // rgnid[32]: next free NID index per node type.  Readers treat this as a
-    // hint; we publish one past the highest index we actually used.
+    // rgnid[32]: the next available NID *index* per node type -- a bare index,
+    // not a packed NID.  Index values below kFirstUserNidIndex are reserved, so
+    // the published mark never drops below it; Outlook recomputes these and
+    // complains when they disagree.
     std::array<std::uint32_t, 32> next_nid{};
-    for (std::size_t i = 0; i < next_nid.size(); ++i) {
-        next_nid[i] = makeNid(static_cast<NidType>(i), 1);
-    }
+    next_nid.fill(kFirstUserNidIndex);
     for (const auto& n : nbt_) {
         const std::size_t t = nidType(n.nid);
-        const Nid candidate = makeNid(static_cast<NidType>(t), nidIndex(n.nid) + 1);
+        const std::uint32_t candidate = nidIndex(n.nid) + 1;
         if (candidate > next_nid[t]) next_nid[t] = candidate;
     }
     for (std::size_t i = 0; i < next_nid.size(); ++i) {

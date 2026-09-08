@@ -88,6 +88,11 @@ constexpr NidType nidType(Nid nid) {
 }
 constexpr std::uint32_t nidIndex(Nid nid) { return nid >> 5; }
 
+// NID indexes below this are reserved for the nodes the format itself defines;
+// objects a writer creates start here.  Outlook's own recovery assigns folders
+// from this point (a rebuilt folder comes back as NID 0x8022, index 0x401).
+inline constexpr std::uint32_t kFirstUserNidIndex = 0x400;
+
 // Reserved node identifiers, [MS-PST] 2.4.1.
 inline constexpr Nid kNidMessageStore        = 0x21;
 inline constexpr Nid kNidNameToIdMap         = 0x61;

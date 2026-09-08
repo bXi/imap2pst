@@ -218,6 +218,85 @@ TEST(PstStreamingTable, LargeFolderStaysStructurallySound) {
     EXPECT_EQ(messages, 5000u);
 }
 
+TEST(PstAllocation, MapPagesCarryTheirOwnOffsetAsBid) {
+    // [MS-PST] 2.2.2.7.2/2.2.2.7.3.  Outlook validates this and rejects the
+    // whole allocation map when it disagrees, which cascades into it rebuilding
+    // both B-trees and declaring present nodes missing.
+    TempPst tmp;
+    PstWriter w(tmp.path());
+    const auto folder = w.createFolder(w.ipmSubtree(), "Big");
+    for (int i = 0; i < 40; ++i) {
+        Message m = makeMessage(i, false);
+        m.body_text = std::string(64 * 1024, 'a');
+        w.addMessage(folder, m);
+    }
+    w.finish();
+
+    const Reader r(readAll(tmp.path()));
+    ASSERT_GT(r.size(), kFirstAMapPos + kAMapSpan) << "test needs a second AMap";
+
+    std::size_t checked = 0;
+    for (std::uint64_t ib = kFirstAMapPos; ib < r.size(); ib += kAMapSpan) {
+        const std::uint8_t* t = r.at(ib + 496);
+        EXPECT_EQ(t[0], kPTypeAMap);
+        EXPECT_EQ(peek64(t + 8), ib) << "AMap page at 0x" << std::hex << ib;
+        EXPECT_EQ(peek16(t + 2), 0) << "AMap pages carry no signature";
+        ++checked;
+    }
+    for (std::uint64_t ib = kFirstPMapPos; ib < r.size(); ib += kPMapSpan) {
+        const std::uint8_t* t = r.at(ib + 496);
+        EXPECT_EQ(t[0], kPTypePMap);
+        EXPECT_EQ(peek64(t + 8), ib) << "PMap page at 0x" << std::hex << ib;
+        EXPECT_EQ(peek16(t + 2), 0) << "PMap pages carry no signature";
+        ++checked;
+    }
+    EXPECT_GE(checked, 3u);
+}
+
+TEST(PstAllocation, BTreePagesAreMarkedInTheAMap) {
+    // The block-level check does not cover these: pages are not in the BBT, so
+    // nothing else in the suite would notice if they went unmarked.
+    TempPst tmp;
+    writeSample(tmp.path(), 400);
+    const Reader r(readAll(tmp.path()));
+
+    auto is_allocated = [&](std::uint64_t ib) {
+        const std::uint64_t map = (ib - kFirstAMapPos) / kAMapSpan;
+        const std::uint64_t base = kFirstAMapPos + map * kAMapSpan;
+        const std::uint64_t bit = (ib - base) / kBlockAlign;
+        return (*r.at(base + bit / 8) & (0x80u >> (bit % 8))) != 0;
+    };
+
+    for (const auto& page : r.btreePages()) {
+        EXPECT_TRUE(is_allocated(page)) << "B-tree page at 0x" << std::hex << page
+                                        << " is not marked in the AMap";
+    }
+}
+
+TEST(PstNodes, UserObjectsUseTheNonReservedNidRange) {
+    TempPst tmp;
+    writeSample(tmp.path(), 20);
+    const Reader r(readAll(tmp.path()));
+    for (Nid nid : r.nodes()) {
+        const NidType type = nidType(nid);
+        if (type != kNidTypeNormalMessage && type != kNidTypeNormalFolder) continue;
+        if (nid == kNidRootFolder) continue;  // reserved by the format
+        EXPECT_GE(nidIndex(nid), kFirstUserNidIndex)
+            << "NID 0x" << std::hex << nid << " sits in the reserved index range";
+    }
+}
+
+TEST(PstHeader, NidHighWaterMarksClearTheReservedRange) {
+    TempPst tmp;
+    writeSample(tmp.path(), 20);
+    const Reader r(readAll(tmp.path()));
+    const std::uint8_t* h = r.at(0);
+    for (int i = 0; i < 32; ++i) {
+        EXPECT_GE(peek32(h + 44 + i * 4), kFirstUserNidIndex)
+            << "rgnid[" << i << "] is below the reserved index range";
+    }
+}
+
 TEST(PstNodes, ReservedNodesArePresent) {
     TempPst tmp;
     writeSample(tmp.path(), 5);
