@@ -314,6 +314,7 @@ void PstWriter::addMessage(FolderId folder_id, const Message& msg) {
         at.addColumn(PR_ATTACH_SIZE);
         at.addColumn(PR_ATTACH_MIME_TAG);
         at.addColumn(PR_ATTACH_NUM);
+        at.addColumn(PR_ATTACH_RENDERING_POS);
 
         for (std::size_t i = 0; i < msg.attachments.size(); ++i) {
             const Attachment& a = msg.attachments[i];
@@ -334,15 +335,18 @@ void PstWriter::addMessage(FolderId folder_id, const Message& msg) {
             if (!a.content_type.empty()) apc.setString(PR_ATTACH_MIME_TAG, a.content_type);
             if (!a.content_id.empty()) apc.setString(PR_ATTACH_CONTENT_ID, a.content_id);
             // PidTagAttachSize is the size consumed by the whole Attachment
-            // object, not just its payload: Outlook recomputes it and reports
-            // the payload length on its own as invalid.  Approximate it as the
-            // payload plus the encoded size of the attachment's other
-            // properties.
+            // object rather than the length of its payload, which on its own is
+            // reported as invalid.  Summed here over every property actually
+            // written below: the payload, the three name strings each stored
+            // separately, the mime tag and content id, and the fixed-width
+            // values.  The exact derivation is undocumented, so this is the
+            // best-supported reading rather than a certainty.
             std::size_t attach_size = a.data.size();
-            for (const std::string* s : {&name, &a.content_type, &a.content_id}) {
-                attach_size += s->size() * 2;  // stored as UTF-16
-            }
-            attach_size += 6 * 8;  // the fixed-width properties and their records
+            attach_size += name.size() * 2 * 3;  // display, short and long name
+            attach_size += a.content_type.size() * 2;
+            attach_size += a.content_id.size() * 2;
+            attach_size += 5 * 4;  // method, number, rendering position,
+                                   // object type and the size value itself
             apc.setInt32(PR_ATTACH_SIZE, static_cast<std::uint32_t>(attach_size));
             // Written straight through to its own subnode rather than copied
             // into the property context first: an attachment is the largest
@@ -363,6 +367,7 @@ void PstWriter::addMessage(FolderId folder_id, const Message& msg) {
             at.setInt32(r, PR_ATTACH_SIZE, static_cast<std::uint32_t>(attach_size));
             at.setString(r, PR_ATTACH_MIME_TAG, a.content_type);
             at.setInt32(r, PR_ATTACH_NUM, static_cast<std::uint32_t>(i));
+            at.setInt32(r, PR_ATTACH_RENDERING_POS, 0xFFFFFFFFu);
         }
 
         SubnodeAllocator at_subs(ndb_);
