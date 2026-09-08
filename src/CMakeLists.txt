@@ -29,3 +29,13 @@ if(IMAP2PST_WITH_IMAP)
   target_include_directories(imap2pst_imap PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(imap2pst_imap PUBLIC imap2pst_imap_parse PRIVATE imap2pst_curl)
 endif()
+
+# --- pipeline and CLI --------------------------------------------------------
+if(IMAP2PST_WITH_IMAP AND IMAP2PST_WITH_MIME)
+  add_library(imap2pst_pipeline STATIC pipeline/pipeline.cpp)
+  target_include_directories(imap2pst_pipeline PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(imap2pst_pipeline PUBLIC imap2pst_imap imap2pst_mime imap2pst_pst)
+
+  add_executable(imap2pst main.cpp)
+  target_link_libraries(imap2pst PRIVATE imap2pst_pipeline)
+endif()

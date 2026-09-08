@@ -23,13 +23,20 @@ if(IMAP2PST_WITH_MIME)
   gtest_discover_tests(imap2pst_mime_tests)
 endif()
 
-# The client tests use a fake transport that replays fixtures, so they still
-# need no network and no IMAP server.
+# The client and pipeline tests use a fake transport that replays fixtures, so
+# they still need no network and no IMAP server.
 if(IMAP2PST_WITH_IMAP)
   add_executable(imap2pst_client_tests test_imap_client.cpp)
   target_link_libraries(imap2pst_client_tests PRIVATE
     imap2pst_imap imap2pst_test_support GTest::gtest_main)
   gtest_discover_tests(imap2pst_client_tests)
+endif()
+
+if(IMAP2PST_WITH_IMAP AND IMAP2PST_WITH_MIME)
+  add_executable(imap2pst_pipeline_tests test_pipeline.cpp)
+  target_link_libraries(imap2pst_pipeline_tests PRIVATE
+    imap2pst_pipeline imap2pst_test_support GTest::gtest_main)
+  gtest_discover_tests(imap2pst_pipeline_tests)
 endif()
 
 # --- libpff round-trip -------------------------------------------------------
@@ -58,4 +65,21 @@ if(Python3_Interpreter_FOUND)
     SKIP_RETURN_CODE 77)
 else()
   message(STATUS "Python3 not found; the libpff round-trip test is disabled")
+endif()
+
+# --- opt-in live server test -------------------------------------------------
+# Needs network access and real credentials, so it is off by default and never
+# runs in CI.  See tests/scripts/live_imap_test.sh for the environment it wants.
+option(IMAP2PST_LIVE_TEST "Add an opt-in integration test against a real IMAP server" OFF)
+if(IMAP2PST_LIVE_TEST)
+  if(TARGET imap2pst)
+    add_test(NAME imap_live_migration
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/scripts/live_imap_test.sh
+                     $<TARGET_FILE:imap2pst>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_pst.py
+                     ${Python3_EXECUTABLE})
+    set_tests_properties(imap_live_migration PROPERTIES LABELS live)
+  else()
+    message(WARNING "IMAP2PST_LIVE_TEST needs the imap2pst CLI; enable IMAP2PST_WITH_IMAP and IMAP2PST_WITH_MIME")
+  endif()
 endif()
