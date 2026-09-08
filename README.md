@@ -233,9 +233,12 @@ likely you are to hit them:
 
 **Outlook**
 
-Verified: a generated PST opens in Outlook (build 16.0.10417.20207) with folder
-hierarchy, message bodies, attachments and non-ASCII subjects, sender names and
-folder names all intact.
+Partly verified. A generated PST opens in Outlook (build 16.0.10417.20207)
+**after** its Inbox Repair Tool has been run over it, with folder hierarchy,
+message bodies, attachments and non-ASCII subjects, sender names and folder
+names all intact. Outlook still will not open one directly, so this is not yet
+a usable result -- the most likely cause is the reserved furniture listed below,
+which the repair tool builds and this writer does not.
 
 Getting there took four rounds of Outlook's Inbox Repair Tool, and the log it
 writes is by far the best diagnostic available for this format — worth reaching
