@@ -1,0 +1,5 @@
+build/
+build-*/
+.venv/
+*.pst
+compile_commands.json
