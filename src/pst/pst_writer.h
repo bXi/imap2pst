@@ -68,6 +68,7 @@ class PstWriter {
     static std::vector<PropTag> recipientColumns();
     void writeNodeFromHeap(Nid nid, Nid parent, const std::vector<std::uint8_t>& heap,
                            SubnodeAllocator& subs);
+    void writeReservedNodes();
     void writeMessageStore();
     void writeNameIdMap();
     void writeFolders();

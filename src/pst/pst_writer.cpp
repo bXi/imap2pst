@@ -408,6 +408,69 @@ void PstWriter::addMessage(FolderId folder_id, const Message& msg) {
 
 // -------------------------------------------------------------- finalisation
 
+void PstWriter::writeReservedNodes() {
+    // The furniture Outlook expects a store to come with.  Every column set
+    // below was read out of a PST that Outlook's own Inbox Repair Tool built
+    // from one of ours, so these are its values rather than a guess.
+    //
+    // The tables are prototypes: they carry columns and no rows, and Outlook
+    // uses them when it creates objects of the matching kind.
+    struct Template {
+        Nid nid;
+        std::initializer_list<PropTag> columns;
+    };
+    static const Template kTemplates[] = {
+        {makeNid(kNidTypeHierarchyTable, 0x30),
+         {0x0E300102, 0x0E330014, 0x0E340102, 0x0E380003, 0x3001001F, 0x36020003,
+          0x36030003, 0x360A000B, 0x3613001F, 0x66350003, 0x66360003}},
+        {makeNid(kNidTypeContentsTable, 0x30),
+         {0x00170003, 0x001A001F, 0x00360003, 0x0037001F, 0x00390040, 0x0042001F,
+          0x0057000B, 0x0058000B, 0x0070001F, 0x00710102, 0x0E03001F, 0x0E04001F,
+          0x0E060040, 0x0E070003, 0x0E080003, 0x0E170003, 0x0E300102, 0x0E330014,
+          0x0E340102, 0x0E380003, 0x0E3C0102, 0x0E3D0102, 0x10970003, 0x30080040,
+          0x30130102, 0x65C60003}},
+        {makeNid(kNidTypeAssocContentsTable, 0x30),
+         {0x001A001F, 0x0E070003, 0x0E170003, 0x3001001F, 0x6800001F, 0x6803000B,
+          0x68051003, 0x682F001F, 0x70030003, 0x70040102, 0x70050102, 0x7006001F,
+          0x70070003}},
+        {makeNid(kNidTypeSearchContentsTable, 0x30),
+         {0x00170003, 0x001A001F, 0x00360003, 0x0037001F, 0x0042001F, 0x0057000B,
+          0x0058000B, 0x0E03001F, 0x0E04001F, 0x0E05001F, 0x0E060040, 0x0E070003,
+          0x0E080003, 0x0E170003, 0x0E2A000B, 0x30080040, 0x67F10003}},
+        {makeNid(kNidTypeReceiveFolderTable, 0x31), {0x001A001F, 0x66050003}},
+        {makeNid(kNidTypeOutgoingQueueTable, 0x32),
+         {0x000F0040, 0x00390040, 0x0E070003, 0x0E100003, 0x0E140003, 0x0E29001F,
+          0x67F10003}},
+        {makeNid(kNidTypeAttachmentTable, 0x33),
+         {0x0E200003, 0x3704001F, 0x37050003, 0x370B0003}},
+        {makeNid(kNidTypeRecipientTable, 0x34),
+         {0x0C150003, 0x0E0F000B, 0x0FF90102, 0x0FFE0003, 0x0FFF0102, 0x3001001F,
+          0x3002001F, 0x3003001F, 0x300B0102, 0x39000003, 0x39FF001F, 0x3A40000B}},
+        // Three more table types the format defines but does not name publicly.
+        {makeNid(static_cast<NidType>(0x16), 0x35),
+         {0x0E330014, 0x0E370102, 0x0E380003}},
+        {makeNid(static_cast<NidType>(0x17), 0x36),
+         {0x001A001F, 0x0E300102, 0x0E310102, 0x0E330014, 0x0E340102, 0x0E380003,
+          0x0E3E0102}},
+        {makeNid(static_cast<NidType>(0x18), 0x37), {0x0E330014, 0x30070040}},
+    };
+
+    for (const auto& t : kTemplates) {
+        TableContext tc;
+        for (PropTag tag : t.columns) tc.addColumn(tag);
+        SubnodeAllocator subs(ndb_);
+        const auto heap = tc.serialize(subs);
+        writeNodeFromHeap(t.nid, 0, heap, subs);
+    }
+
+    // These exist in the node tree with no data block at all -- the repaired
+    // file records them as bidData 0, bidSub 0 -- so they are placeholders the
+    // store is expected to declare rather than objects with content.
+    for (Nid nid : {kNidSearchManagementQ, Nid{0xE41}, Nid{0xEC1}, Nid{0xF21}}) {
+        ndb_.addNode(nid, 0, 0, 0);
+    }
+}
+
 void PstWriter::writeMessageStore() {
     SubnodeAllocator subs(ndb_);
     PropertyContext pc;
@@ -503,6 +566,7 @@ void PstWriter::finish() {
     if (finished_) return;
     finished_ = true;
     writeFolders();
+    writeReservedNodes();
     writeMessageStore();
     // Last, so that every named property minted while writing messages is in.
     writeNameIdMap();
