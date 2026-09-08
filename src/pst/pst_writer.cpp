@@ -49,6 +49,16 @@ PstWriter::PstWriter(const std::string& path) : ndb_(path) {
     // can see hangs off.
     makeFolder(0, "Root - Mailbox", kNidRootFolder);
     ipm_subtree_ = makeFolder(kNidRootFolder, "Top of Personal Folders", 0);
+
+    // Every folder the message store advertises has to be real.  Aliasing them
+    // onto the subtree, as an earlier version did, both lies to the reader and
+    // makes "delete" target the subtree root.
+    deleted_items_ = makeFolder(ipm_subtree_, "Deleted Items", 0);
+    sent_items_    = makeFolder(ipm_subtree_, "Sent Items", 0);
+    outbox_        = makeFolder(ipm_subtree_, "Outbox", 0);
+    search_root_   = makeFolder(root_folder_, "Search Root", 0);
+    views_         = makeFolder(root_folder_, "Views", 0);
+    common_views_  = makeFolder(root_folder_, "Common Views", 0);
 }
 
 PstWriter::~PstWriter() {
@@ -407,13 +417,19 @@ void PstWriter::writeMessageStore() {
     pc.setInt32(PR_PST_PASSWORD, 0);
     pc.setString(PR_DISPLAY_NAME, "Personal Folders");
     pc.setBinary(PR_IPM_SUBTREE_ENTRYID, entryId(ipm_subtree_));
-    pc.setBinary(PR_IPM_WASTEBASKET_ENTRYID, entryId(ipm_subtree_));
-    pc.setBinary(PR_IPM_SENTMAIL_ENTRYID, entryId(ipm_subtree_));
-    pc.setBinary(PR_IPM_OUTBOX_ENTRYID, entryId(ipm_subtree_));
-    pc.setBinary(PR_FINDER_ENTRYID, entryId(root_folder_));
+    pc.setBinary(PR_IPM_WASTEBASKET_ENTRYID, entryId(deleted_items_));
+    pc.setBinary(PR_IPM_SENTMAIL_ENTRYID, entryId(sent_items_));
+    pc.setBinary(PR_IPM_OUTBOX_ENTRYID, entryId(outbox_));
+    pc.setBinary(PR_FINDER_ENTRYID, entryId(search_root_));
+    pc.setBinary(PR_VIEWS_ENTRYID, entryId(views_));
+    pc.setBinary(PR_COMMON_VIEWS_ENTRYID, entryId(common_views_));
     pc.setBinary(PR_ENTRYID, entryId(root_folder_));
-    // Bits 0..5 mark which of the special folder entry ids above are valid.
-    pc.setInt32(PR_VALID_FOLDER_MASK, 0x0000003F);
+    // Each bit promises that the matching entry id above resolves to a real
+    // folder.  The inbox bit (0x02) is deliberately absent: a PST is not a
+    // delivery store and no PidTagIpmInboxEntryId is written, and promising an
+    // entry id that does not exist is exactly the kind of thing a reader
+    // follows straight into a fault.
+    pc.setInt32(PR_VALID_FOLDER_MASK, 0x01 | 0x04 | 0x08 | 0x10 | 0x20 | 0x40 | 0x80);
 
     const auto heap = pc.serialize(subs);
     writeNodeFromHeap(kNidMessageStore, 0, heap, subs);

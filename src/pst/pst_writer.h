@@ -34,6 +34,10 @@ class PstWriter {
 
     FolderId createFolder(FolderId parent, const std::string& name);
 
+    // Folders the writer creates on its own: the root, the IPM subtree and the
+    // special folders the message store points at.
+    static constexpr std::size_t kBuiltinFolderCount = 8;
+
     // Writes the message and links it into `folder`'s contents table.
     void addMessage(FolderId folder, const Message& msg);
 
@@ -80,6 +84,14 @@ class PstWriter {
     std::uint8_t store_guid_[16] = {};
     Nid root_folder_ = kNidRootFolder;
     Nid ipm_subtree_ = 0;
+    // The special folders the message store advertises.  They have to exist:
+    // PidTagValidFolderMask promises them, and Outlook follows the entry ids.
+    Nid deleted_items_ = 0;
+    Nid sent_items_ = 0;
+    Nid outbox_ = 0;
+    Nid search_root_ = 0;
+    Nid views_ = 0;
+    Nid common_views_ = 0;
     std::uint32_t next_folder_index_ = kFirstUserNidIndex;
     std::uint32_t next_message_index_ = kFirstUserNidIndex;
     bool finished_ = false;

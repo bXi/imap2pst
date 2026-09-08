@@ -9,6 +9,7 @@
 
 #include "imap/imap_client.h"
 #include "pipeline/pipeline.h"
+#include "pst/pst_writer.h"
 #include "pst_reader.h"
 #include "test_util.h"
 
@@ -109,8 +110,10 @@ TEST(Pipeline, MigratesFoldersAndMessagesIntoAValidPst) {
         if (pst::nidType(nid) == pst::kNidTypeNormalFolder) ++folder_nodes;
     }
     EXPECT_EQ(message_nodes, 5u);
-    // Root, "Top of Personal Folders", INBOX, INBOX/Work and Archive.
-    EXPECT_EQ(folder_nodes, 5u);
+    // INBOX, INBOX/Work and Archive, on top of the folders the writer always
+    // creates (root, the IPM subtree and the special folders the message store
+    // advertises).
+    EXPECT_EQ(folder_nodes, pst::PstWriter::kBuiltinFolderCount + 3);
 }
 
 TEST(Pipeline, FolderFilterRestrictsWhatIsMigrated) {
