@@ -8,9 +8,12 @@ target_compile_definitions(imap2pst_test_support
 include(GoogleTest)
 
 # --- unit tests --------------------------------------------------------------
-add_executable(imap2pst_tests test_pst_binary.cpp)
+add_executable(imap2pst_tests
+  test_imap_parse.cpp
+  test_pst_binary.cpp
+)
 target_link_libraries(imap2pst_tests PRIVATE
-  imap2pst_pst imap2pst_test_support GTest::gtest_main)
+  imap2pst_pst imap2pst_imap_parse imap2pst_test_support GTest::gtest_main)
 gtest_discover_tests(imap2pst_tests)
 
 if(IMAP2PST_WITH_MIME)
@@ -18,6 +21,15 @@ if(IMAP2PST_WITH_MIME)
   target_link_libraries(imap2pst_mime_tests PRIVATE
     imap2pst_mime imap2pst_test_support GTest::gtest_main)
   gtest_discover_tests(imap2pst_mime_tests)
+endif()
+
+# The client tests use a fake transport that replays fixtures, so they still
+# need no network and no IMAP server.
+if(IMAP2PST_WITH_IMAP)
+  add_executable(imap2pst_client_tests test_imap_client.cpp)
+  target_link_libraries(imap2pst_client_tests PRIVATE
+    imap2pst_imap imap2pst_test_support GTest::gtest_main)
+  gtest_discover_tests(imap2pst_client_tests)
 endif()
 
 # --- libpff round-trip -------------------------------------------------------

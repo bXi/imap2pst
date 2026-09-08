@@ -1,0 +1,7 @@
+* LIST (\HasNoChildren) "." "INBOX"
+* LIST (\HasChildren) "." "INBOX.Work"
+* LIST (\HasNoChildren) "." "INBOX.Work.2024"
+* LIST (\Noselect \HasChildren) "." "Archive"
+* LIST (\HasNoChildren) "." "Archive.Old Mail"
+* LIST (\HasNoChildren) NIL "Flat Folder"
+* LIST () "/" "Quoted \"Name\" Folder"

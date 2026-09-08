@@ -16,3 +16,16 @@ if(IMAP2PST_WITH_MIME)
   target_include_directories(imap2pst_mime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(imap2pst_mime PUBLIC imap2pst_pst PRIVATE vmime-static)
 endif()
+
+# --- imap --------------------------------------------------------------------
+# The response parsers are separated from the libcurl transport so tests can
+# drive them with recorded fixtures.
+add_library(imap2pst_imap_parse STATIC imap/imap_parse.cpp)
+target_include_directories(imap2pst_imap_parse PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(imap2pst_imap_parse PUBLIC imap2pst_pst)
+
+if(IMAP2PST_WITH_IMAP)
+  add_library(imap2pst_imap STATIC imap/imap_client.cpp)
+  target_include_directories(imap2pst_imap PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(imap2pst_imap PUBLIC imap2pst_imap_parse PRIVATE imap2pst_curl)
+endif()
