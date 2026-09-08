@@ -233,10 +233,30 @@ likely you are to hit them:
 
 **Outlook**
 
-The acceptance bar for this milestone is "libpff reads it back correctly", and
-that is what CI checks. The message store node, the IPM subtree and the standard
-folder entry ids *are* written, so a real Outlook has a fair chance of opening
-the result — but that has not been verified and is not a supported claim yet.
+Verified: a generated PST opens in Outlook (build 16.0.10417.20207) with folder
+hierarchy, message bodies, attachments and non-ASCII subjects, sender names and
+folder names all intact.
+
+Getting there took four rounds of Outlook's Inbox Repair Tool, and the log it
+writes is by far the best diagnostic available for this format — worth reaching
+for before guessing. Two lessons are baked into the code and its tests:
+
+* A single wrong field cascades. A bad AMap page BID made Outlook report every
+  B-tree page as unallocated, rebuild both trees, and declare the message store
+  and root folder missing; all of it was present. Check any complaint against
+  the bytes before acting on it.
+* Passing the repair tool is not the same as opening. scanpst repairs as it
+  validates, so it will report a file as nearly clean that Outlook still
+  refuses. The last crash was a `PidTagValidFolderMask` that promised inbox and
+  views entry ids the file never contained — self-consistent as a number, so the
+  validator had nothing to object to, and fatal to a reader that follows it.
+
+Still reported by the repair tool, and not yet written: the receive folder
+table, the search folders' update queues, the search activity list, the folder
+templates and the outgoing queue. Outlook builds these itself and opens the file
+without them. `PidTagAttachSize` is also still rejected; its exact derivation is
+undocumented and the current value is the sum of the attachment's property
+sizes.
 
 **Transport**
 
