@@ -1,0 +1,8 @@
+From: "日本語 テスト" <jp@example.jp>
+To: dest@example.jp
+Subject: 生データ
+Date: Sat, 18 Nov 2023 03:04:05 +0900
+Message-ID: <raw8bit-006@example.jp>
+Content-Type: text/plain; charset=utf-8
+
+本文

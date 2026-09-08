@@ -102,6 +102,28 @@ TEST(MimeCharset, Utf8BodyAndEncodedWordSubject) {
               std::string::npos);
 }
 
+TEST(MimeCharset, RawUtf8InUndeclaredHeadersSurvives) {
+    // RFC 5322 says an unencoded header is us-ascii, so raw 8-bit bytes are
+    // strictly non-conformant -- but real senders emit them constantly, and
+    // treating each byte as an invalid us-ascii character turns the whole
+    // display name into replacement characters.
+    const Message m = parse(test::readFixture("raw8bit_headers.eml"));
+    EXPECT_EQ(m.from.name, "\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E "
+                           "\xE3\x83\x86\xE3\x82\xB9\xE3\x83\x88");
+    EXPECT_EQ(m.from.email, "jp@example.jp");
+    EXPECT_EQ(m.subject, "\xE7\x94\x9F\xE3\x83\x87\xE3\x83\xBC\xE3\x82\xBF");
+    EXPECT_EQ(m.from.name.find("\xEF\xBF\xBD"), std::string::npos)
+        << "no byte should have decayed to U+FFFD";
+}
+
+TEST(MimeCharset, RawLatin1InUndeclaredHeadersFallsBack) {
+    // Not valid UTF-8, so the windows-1252 fallback has to carry it.
+    const Message m = parse(test::readFixture("raw8bit_latin1.eml"));
+    EXPECT_EQ(m.from.name, "Andr\xC3\xA9 M\xC3\xBCller");
+    EXPECT_EQ(m.subject, "Caf\xC3\xA9 r\xC3\xA9union");
+    EXPECT_EQ(m.subject.find("\xEF\xBF\xBD"), std::string::npos);
+}
+
 TEST(MimeImapState, CarriesFlagsAndInternalDateThrough) {
     RawMessage raw;
     raw.uid = 4242;

@@ -1,5 +1,6 @@
 #include "mime/mime_parser.h"
 
+#include <algorithm>
 #include <ctime>
 #include <sstream>
 
@@ -33,9 +34,62 @@ std::string extract(const vmime::shared_ptr<const vmime::contentHandler>& ch) {
     return oss.str();
 }
 
+// True when `s` is well-formed UTF-8.  Used to rescue headers that carry raw
+// 8-bit bytes with no declared charset.
+bool isValidUtf8(const std::string& s) {
+    std::size_t i = 0;
+    while (i < s.size()) {
+        const auto c = static_cast<unsigned char>(s[i]);
+        std::size_t extra;
+        std::uint32_t cp;
+        if (c < 0x80) { ++i; continue; }
+        else if ((c & 0xE0) == 0xC0) { extra = 1; cp = c & 0x1Fu; }
+        else if ((c & 0xF0) == 0xE0) { extra = 2; cp = c & 0x0Fu; }
+        else if ((c & 0xF8) == 0xF0) { extra = 3; cp = c & 0x07u; }
+        else return false;
+        if (i + extra >= s.size()) return false;
+        for (std::size_t k = 1; k <= extra; ++k) {
+            const auto cc = static_cast<unsigned char>(s[i + k]);
+            if ((cc & 0xC0) != 0x80) return false;
+            cp = (cp << 6) | (cc & 0x3Fu);
+        }
+        // Reject overlong forms, surrogates and out-of-range code points.
+        if (extra == 1 && cp < 0x80) return false;
+        if (extra == 2 && cp < 0x800) return false;
+        if (extra == 3 && cp < 0x10000) return false;
+        if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) return false;
+        i += extra + 1;
+    }
+    return true;
+}
+
+// Converts a header text to UTF-8.
+//
+// RFC 5322 says an unencoded header is us-ascii, and vmime honours that: a word
+// with no declared charset containing raw 8-bit bytes converts to one U+FFFD
+// per byte, destroying it.  Plenty of real senders emit raw UTF-8 display names
+// anyway, so a word that vmime has left as us-ascii but which holds 8-bit bytes
+// is re-read as UTF-8 when it is valid UTF-8, and as windows-1252 otherwise --
+// which cannot fail and keeps the bytes legible.
 std::string textToUtf8(const vmime::text& t) {
+    std::string out;
     try {
-        return t.getConvertedText(utf8());
+        for (std::size_t i = 0; i < t.getWordCount(); ++i) {
+            const auto word = t.getWordAt(i);
+            if (!word) continue;
+            const std::string& buffer = word->getBuffer();
+            const bool eight_bit =
+                std::any_of(buffer.begin(), buffer.end(), [](char c) {
+                    return static_cast<unsigned char>(c) >= 0x80;
+                });
+            vmime::charset cs = word->getCharset();
+            if (eight_bit && cs == vmime::charset(vmime::charsets::US_ASCII)) {
+                cs = isValidUtf8(buffer) ? vmime::charset("utf-8")
+                                         : vmime::charset("windows-1252");
+            }
+            out += toUtf8(buffer, cs);
+        }
+        return out;
     } catch (const vmime::exception&) {
         return t.getWholeBuffer();
     }
