@@ -111,6 +111,11 @@ inline constexpr PropTag PR_SECURE_SUBMIT_FLAGS     = makeTag(0x65C6, kPtLong);
 inline constexpr PropTag PR_PST_HIDDEN_COUNT        = makeTag(0x6635, kPtLong);
 inline constexpr PropTag PR_PST_HIDDEN_UNREAD       = makeTag(0x6636, kPtLong);
 inline constexpr PropTag PR_SEARCH_KEY              = makeTag(0x300B, kPtBinary);
+// Columns Outlook requires a recipient table to declare.
+inline constexpr PropTag PR_RESPONSIBILITY          = makeTag(0x0E0F, kPtBoolean);
+inline constexpr PropTag PR_DISPLAY_TYPE            = makeTag(0x3900, kPtLong);
+inline constexpr PropTag PR_7BIT_DISPLAY_NAME       = makeTag(0x39FF, kPtUnicode);
+inline constexpr PropTag PR_SEND_RICH_INFO          = makeTag(0x3A40, kPtBoolean);
 // Associated-contents (FAI) tables carry the view-descriptor columns.
 inline constexpr PropTag PR_VD_NAME                 = makeTag(0x6800, kPtUnicode);
 inline constexpr PropTag PR_VD_FLAGS                = makeTag(0x6803, kPtBoolean);
@@ -155,6 +160,9 @@ inline constexpr std::uint32_t MAPI_BCC = 3;
 
 // PR_OBJECT_TYPE.
 inline constexpr std::uint32_t MAPI_MAILUSER  = 6;
+
+// PR_DISPLAY_TYPE.
+inline constexpr std::uint32_t DT_MAILUSER = 0;
 inline constexpr std::uint32_t MAPI_ATTACH    = 7;
 
 // PR_INTERNET_CPID: everything we write is transcoded to UTF-8.

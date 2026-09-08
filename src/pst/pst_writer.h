@@ -57,6 +57,11 @@ class PstWriter {
     Folder& folder(FolderId id);
     FolderId makeFolder(Nid parent, const std::string& name, Nid forced_nid);
     std::vector<std::uint8_t> entryId(Nid nid) const;
+    // A MAPI one-off EntryID, which is how a recipient with only an SMTP
+    // address is addressed when there is no address book behind it.
+    static std::vector<std::uint8_t> oneOffEntryId(const std::string& display_name,
+                                                   const std::string& email);
+    static std::vector<PropTag> recipientColumns();
     void writeNodeFromHeap(Nid nid, Nid parent, const std::vector<std::uint8_t>& heap,
                            SubnodeAllocator& subs);
     void writeMessageStore();

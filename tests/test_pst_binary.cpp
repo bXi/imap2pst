@@ -346,6 +346,51 @@ TEST(PstHeader, AMapFreeSpaceIsPublished) {
     EXPECT_EQ(peek64(r.at(180 + 20)), expected) << "ROOT.cbAMapFree";
 }
 
+TEST(PstHeap, BthKeysNeverStartAtZero) {
+    // Outlook rejects a BTH whose first key is zero ("keys overlap, dwkey=0,
+    // dwkeyMin=0") and discards the table that owns it, which is how a
+    // recipient table full of correct columns got reported as missing all of
+    // them.  Row ids therefore start at one.
+    TempPst tmp;
+    writeSample(tmp.path(), 10);
+    const Reader r(readAll(tmp.path()));
+
+    std::size_t bths = 0;
+    for (const auto& blk : r.blocks()) {
+        if (blk.cb < 12) continue;
+        const std::uint8_t* p = r.at(blk.ib);
+        if (p[2] != kHnSignature) continue;
+        const Hid user_root = peek32(p + 4);
+        if (user_root == 0 || hidBlockIndex(user_root) != 0) continue;
+        const std::uint16_t ibHnpm = peek16(p);
+        if (ibHnpm + 4u > blk.cb) continue;
+        const std::uint16_t alloc_count = peek16(p + ibHnpm);
+        const std::uint16_t index = hidAllocIndex(user_root);
+        if (index == 0 || index > alloc_count) continue;
+        const std::uint16_t start = peek16(p + ibHnpm + 4 + 2 * (index - 1));
+        if (start + 8u > blk.cb) continue;
+        const std::uint8_t* bth = p + start;
+        if (bth[0] != kHnSigBTH) continue;  // a TC's user root, not a BTH
+
+        const std::uint8_t cb_key = bth[1];
+        const std::uint8_t levels = bth[3];
+        const Hid root = peek32(bth + 4);
+        if (root == 0 || levels != 0 || hidBlockIndex(root) != 0) continue;
+        const std::uint16_t ri = hidAllocIndex(root);
+        if (ri == 0 || ri > alloc_count) continue;
+        const std::uint16_t rstart = peek16(p + ibHnpm + 4 + 2 * (ri - 1));
+        const std::uint16_t rend = peek16(p + ibHnpm + 6 + 2 * (ri - 1));
+        if (rend <= rstart) continue;
+
+        std::uint64_t first_key = 0;
+        for (int i = cb_key; i-- > 0;) first_key = (first_key << 8) | p[rstart + i];
+        EXPECT_NE(first_key, 0u)
+            << "BTH at 0x" << std::hex << blk.ib << " starts at key zero";
+        ++bths;
+    }
+    EXPECT_GT(bths, 5u) << "expected to have inspected several BTHs";
+}
+
 TEST(PstNodes, ReservedNodesArePresent) {
     TempPst tmp;
     writeSample(tmp.path(), 5);

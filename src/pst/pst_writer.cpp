@@ -66,6 +66,36 @@ PstWriter::Folder& PstWriter::folder(FolderId id) {
     throw PstError("unknown folder id " + std::to_string(id));
 }
 
+std::vector<std::uint8_t> PstWriter::oneOffEntryId(const std::string& display_name,
+                                                   const std::string& email) {
+    // [MS-OXCDATA] 2.2.5.1: flags, the one-off provider UID, version and flags,
+    // then display name, address type and address as UTF-16 strings.
+    static const std::uint8_t kOneOffUid[16] = {0x81, 0x2B, 0x1F, 0xA4, 0xBE, 0xA3,
+                                                0x10, 0x19, 0x9D, 0x6E, 0x00, 0xDD,
+                                                0x01, 0x0F, 0x54, 0x02};
+    std::vector<std::uint8_t> e;
+    put32(e, 0);
+    putBytes(e, kOneOffUid, 16);
+    put16(e, 0);       // version
+    put16(e, 0x1000);  // MAPI_UNICODE
+    auto put_string = [&e](const std::string& s) {
+        const auto utf16 = utf8ToUtf16le(s);
+        e.insert(e.end(), utf16.begin(), utf16.end());
+        put16(e, 0);  // terminator
+    };
+    put_string(display_name);
+    put_string("SMTP");
+    put_string(email);
+    return e;
+}
+
+std::vector<PropTag> PstWriter::recipientColumns() {
+    return {PR_RECIPIENT_TYPE, PR_RESPONSIBILITY, PR_RECORD_KEY, PR_OBJECT_TYPE,
+            PR_ENTRYID,        PR_DISPLAY_NAME,   PR_ADDRTYPE,   PR_EMAIL_ADDRESS,
+            PR_SEARCH_KEY,     PR_DISPLAY_TYPE,   PR_7BIT_DISPLAY_NAME,
+            PR_SEND_RICH_INFO};
+}
+
 std::vector<PropTag> PstWriter::contentsColumns() {
     return {PR_SUBJECT,        PR_SENDER_NAME,    PR_DISPLAY_TO,
             PR_MESSAGE_CLASS,  PR_MESSAGE_DELIVERY_TIME, PR_MESSAGE_FLAGS,
@@ -232,19 +262,32 @@ void PstWriter::addMessage(FolderId folder_id, const Message& msg) {
     // ---- recipient table -------------------------------------------------
     {
         TableContext rt;
-        rt.addColumn(PR_RECIPIENT_TYPE);
-        rt.addColumn(PR_DISPLAY_NAME);
-        rt.addColumn(PR_EMAIL_ADDRESS);
-        rt.addColumn(PR_ADDRTYPE);
-        rt.addColumn(PR_OBJECT_TYPE);
-        std::uint32_t row_id = 0;
+        for (PropTag tag : recipientColumns()) rt.addColumn(tag);
+        // Row ids start at one: a BTH whose first key is zero is rejected
+        // outright ("keys overlap, dwkey=0, dwkeyMin=0"), and that takes the
+        // whole recipient table with it.
+        std::uint32_t row_id = 1;
         auto add = [&](const Mailbox& m, std::uint32_t type) {
+            const std::string display = m.name.empty() ? m.email : m.name;
             const std::size_t r = rt.addRow(row_id++);
             rt.setInt32(r, PR_RECIPIENT_TYPE, type);
-            rt.setString(r, PR_DISPLAY_NAME, m.name.empty() ? m.email : m.name);
+            rt.setString(r, PR_DISPLAY_NAME, display);
+            rt.setString(r, PR_7BIT_DISPLAY_NAME, display);
             rt.setString(r, PR_EMAIL_ADDRESS, m.email);
             rt.setString(r, PR_ADDRTYPE, "SMTP");
             rt.setInt32(r, PR_OBJECT_TYPE, MAPI_MAILUSER);
+            rt.setInt32(r, PR_DISPLAY_TYPE, DT_MAILUSER);
+            rt.setBool(r, PR_RESPONSIBILITY, false);
+            rt.setBool(r, PR_SEND_RICH_INFO, false);
+            const auto eid = oneOffEntryId(display, m.email);
+            rt.setBinary(r, PR_ENTRYID, eid.data(), eid.size());
+            rt.setBinary(r, PR_RECORD_KEY, eid.data(), eid.size());
+            // The conventional search key for an SMTP recipient.
+            std::string sk = "SMTP:" + m.email;
+            std::transform(sk.begin(), sk.end(), sk.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+            sk.push_back('\0');
+            rt.setBinary(r, PR_SEARCH_KEY, sk.data(), sk.size());
         };
         for (const auto& m : msg.to) add(m, MAPI_TO);
         for (const auto& m : msg.cc) add(m, MAPI_CC);
@@ -290,7 +333,17 @@ void PstWriter::addMessage(FolderId folder_id, const Message& msg) {
             apc.setString(PR_ATTACH_LONG_FILENAME, name);
             if (!a.content_type.empty()) apc.setString(PR_ATTACH_MIME_TAG, a.content_type);
             if (!a.content_id.empty()) apc.setString(PR_ATTACH_CONTENT_ID, a.content_id);
-            apc.setInt32(PR_ATTACH_SIZE, static_cast<std::uint32_t>(a.data.size()));
+            // PidTagAttachSize is the size consumed by the whole Attachment
+            // object, not just its payload: Outlook recomputes it and reports
+            // the payload length on its own as invalid.  Approximate it as the
+            // payload plus the encoded size of the attachment's other
+            // properties.
+            std::size_t attach_size = a.data.size();
+            for (const std::string* s : {&name, &a.content_type, &a.content_id}) {
+                attach_size += s->size() * 2;  // stored as UTF-16
+            }
+            attach_size += 6 * 8;  // the fixed-width properties and their records
+            apc.setInt32(PR_ATTACH_SIZE, static_cast<std::uint32_t>(attach_size));
             // Written straight through to its own subnode rather than copied
             // into the property context first: an attachment is the largest
             // thing this writer handles and does not need to exist twice.
@@ -307,7 +360,7 @@ void PstWriter::addMessage(FolderId folder_id, const Message& msg) {
             at.setString(r, PR_ATTACH_LONG_FILENAME, name);
             at.setString(r, PR_ATTACH_FILENAME, name);
             at.setInt32(r, PR_ATTACH_METHOD, ATTACH_BY_VALUE);
-            at.setInt32(r, PR_ATTACH_SIZE, static_cast<std::uint32_t>(a.data.size()));
+            at.setInt32(r, PR_ATTACH_SIZE, static_cast<std::uint32_t>(attach_size));
             at.setString(r, PR_ATTACH_MIME_TAG, a.content_type);
             at.setInt32(r, PR_ATTACH_NUM, static_cast<std::uint32_t>(i));
         }
