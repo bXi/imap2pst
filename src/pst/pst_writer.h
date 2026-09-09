@@ -24,6 +24,10 @@ using FolderId = Nid;
 class PstWriter {
  public:
     explicit PstWriter(const std::string& path);
+    // Fixes the store's record key instead of generating one.  Two runs with
+    // the same key produce byte-identical files for the same input, which is
+    // what makes a diff between two variants readable.
+    PstWriter(const std::string& path, const std::uint8_t record_key[16]);
     ~PstWriter();
 
     PstWriter(const PstWriter&) = delete;
@@ -31,6 +35,12 @@ class PstWriter {
 
     // "Top of Personal Folders": the folder user-visible content hangs off.
     FolderId ipmSubtree() const { return ipm_subtree_; }
+    FolderId rootFolder() const { return root_folder_; }
+    FolderId deletedItems() const { return deleted_items_; }
+    FolderId sentItems() const { return sent_items_; }
+    FolderId outbox() const { return outbox_; }
+    FolderId views() const { return views_; }
+    FolderId searchRoot() const { return search_root_; }
 
     FolderId createFolder(FolderId parent, const std::string& name);
 
@@ -58,6 +68,7 @@ class PstWriter {
         std::uint32_t unread = 0;
     };
 
+    void init();
     Folder& folder(FolderId id);
     FolderId makeFolder(Nid parent, const std::string& name, Nid forced_nid);
     std::vector<std::uint8_t> entryId(Nid nid) const;

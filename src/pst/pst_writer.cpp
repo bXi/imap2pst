@@ -44,6 +44,16 @@ bool isStructuredHeader(const std::string& name) {
 PstWriter::PstWriter(const std::string& path) : ndb_(path) {
     std::random_device rd;
     for (auto& b : store_guid_) b = static_cast<std::uint8_t>(rd() & 0xFF);
+    init();
+}
+
+PstWriter::PstWriter(const std::string& path, const std::uint8_t record_key[16])
+    : ndb_(path) {
+    std::memcpy(store_guid_, record_key, 16);
+    init();
+}
+
+void PstWriter::init() {
 
     // A store with no named properties at all leaves the name-to-id map's entry
     // stream empty, and a reader that expects it to exist cannot open the file.

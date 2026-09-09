@@ -73,11 +73,24 @@ TEST(PstHeader, MagicVersionAndChecksums) {
     EXPECT_EQ(peek32(h + 4), computeCrc(h + 8, 471)) << "dwCRCPartial";
     EXPECT_EQ(peek32(h + 524), computeCrc(h + 8, 516)) << "dwCRCFull";
 
-    // FMap and FPMap are not used by this writer and must be marked absent.
+    // rgbFM saturates: a freshly written file has one long free run per map.
     for (int i = 0; i < 128; ++i) {
         EXPECT_EQ(h[256 + i], 0xFF) << "rgbFM[" << i << "]";
-        EXPECT_EQ(h[384 + i], 0xFF) << "rgbFP[" << i << "]";
     }
+    // rgbFP must agree with the page maps about where free space is. A bit set
+    // means "that page map is full"; claiming every map is full while the maps
+    // themselves carry free bits is a contradiction the repair tool reports.
+    std::size_t index = 0;
+    for (std::uint64_t ib = kFirstPMapPos; ib < r.size(); ib += kPMapSpan, ++index) {
+        bool has_free = false;
+        for (std::size_t bit = 0; bit < 496 * 8 && !has_free; ++bit) {
+            if ((*r.at(ib + bit / 8) & (0x80u >> (bit % 8))) == 0) has_free = true;
+        }
+        const bool says_full = (h[384 + index / 8] & (0x80u >> (index % 8))) != 0;
+        EXPECT_NE(has_free, says_full)
+            << "rgbFP disagrees with page map " << index;
+    }
+    EXPECT_GT(index, 0u) << "expected at least one page map";
 }
 
 TEST(PstHeader, RootPointsAtTheRealEndOfFile) {
