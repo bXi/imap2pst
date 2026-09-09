@@ -407,6 +407,31 @@ TEST(PstNodes, RootFolderIsItsOwnParent) {
     EXPECT_TRUE(seen) << "root folder node missing";
 }
 
+TEST(PstAllocation, FreeSpaceIsBackedByTheFile) {
+    // The allocation maps describe every slot in their span, so a file that
+    // stops mid-span advertises free space that does not exist.  A reader that
+    // opens the store for writing takes one of those slots and seeks past the
+    // end of the file.
+    TempPst tmp;
+    writeSample(tmp.path(), 5);
+    const Reader r(readAll(tmp.path()));
+
+    EXPECT_EQ(r.ibFileEof(), r.size());
+    EXPECT_EQ((r.size() - kFirstAMapPos) % kAMapSpan, 0u)
+        << "file must end on an allocation-map span boundary";
+
+    // Every slot the maps call free has to lie inside the file.
+    for (std::uint64_t base = kFirstAMapPos; base < r.size(); base += kAMapSpan) {
+        for (std::size_t bit = 0; bit < 496 * 8; ++bit) {
+            const std::uint8_t byte = *r.at(base + bit / 8);
+            if (byte & (0x80u >> (bit % 8))) continue;  // allocated
+            const std::uint64_t slot = base + bit * kBlockAlign;
+            ASSERT_LT(slot, r.size())
+                << "AMap marks 0x" << std::hex << slot << " free, past end of file";
+        }
+    }
+}
+
 TEST(PstNodes, ReservedNodesArePresent) {
     TempPst tmp;
     writeSample(tmp.path(), 5);

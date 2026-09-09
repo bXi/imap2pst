@@ -129,6 +129,7 @@ class NdbWriter {
     std::vector<NbtEntry> nbt_;
     std::vector<std::vector<std::uint8_t>> amaps_;  // 496-byte bitmaps
     std::uint64_t last_amap_ib_ = kFirstAMapPos;
+    std::uint64_t file_end_ = kFirstDataPos;
     std::uint64_t amap_free_ = 0;
     std::uint64_t pmap_free_ = 0;
 };

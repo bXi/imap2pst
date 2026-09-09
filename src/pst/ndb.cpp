@@ -393,11 +393,11 @@ void NdbWriter::emitFixedPages() {
     // Page maps, derived from the allocation maps: a 512-byte page counts as
     // allocated when any of the eight 64-byte slots inside it is.
     pmap_free_ = 0;
-    for (std::uint64_t ib = kFirstPMapPos; ib < cursor_; ib += kPMapSpan) {
+    for (std::uint64_t ib = kFirstPMapPos; ib < file_end_; ib += kPMapSpan) {
         std::vector<std::uint8_t> body(496, 0);
         for (std::size_t bit = 0; bit < 496 * 8; ++bit) {
             const std::uint64_t page_ib = ib - kFirstPMapPos + bit * kPageSize;
-            bool used = page_ib >= cursor_;  // past the end: not available
+            bool used = page_ib >= file_end_;  // outside the file
             if (!used && page_ib >= kFirstAMapPos) {
                 const std::size_t map =
                     static_cast<std::size_t>((page_ib - kFirstAMapPos) / kAMapSpan);
@@ -460,7 +460,7 @@ void NdbWriter::writeHeader(const Bref& nbt, const Bref& bbt) {
     // ROOT, [MS-PST] 2.2.2.5.
     std::uint8_t* root = h.data() + 180;
     poke32(root + 0, 0);                  // dwReserved
-    poke64(root + 4, cursor_);            // ibFileEof
+    poke64(root + 4, file_end_);          // ibFileEof
     poke64(root + 12, last_amap_ib_);     // ibAMapLast
     // Both totals are computed while the maps are written; a reader treats an
     // unset value as "no free space", not as "unknown".
@@ -528,6 +528,18 @@ void NdbWriter::finish() {
             poke16(dst + 18, 2);  // cRef: one reference plus the implicit one
             poke32(dst + 20, 0);  // dwPadding
         });
+
+    // A PST is sized to whole allocation-map spans.  The maps describe every
+    // 64-byte slot in their span, so a file that stops in the middle of one
+    // advertises free space that does not exist -- and a reader that opens the
+    // store for writing takes a free slot straight past the end of the file.
+    // Outlook's own files end exactly on a span boundary.
+    file_end_ = kFirstAMapPos + static_cast<std::uint64_t>(amaps_.size()) * kAMapSpan;
+    if (file_end_ < cursor_) file_end_ = cursor_;
+    if (file_end_ > cursor_) {
+        std::vector<std::uint8_t> pad(static_cast<std::size_t>(file_end_ - cursor_), 0);
+        writeAt(cursor_, pad.data(), pad.size());
+    }
 
     emitFixedPages();
     writeHeader(nbt_root, bbt_root);
