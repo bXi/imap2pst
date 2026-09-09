@@ -479,38 +479,12 @@ void NdbWriter::writeHeader(const Bref& nbt, const Bref& bbt) {
     // at the end of every map, so every byte saturates.
     std::memset(h.data() + 256, 0xFF, 128);  // rgbFM
 
-    // rgbFP says, per page map, whether that map is full.  Leaving it saturated
-    // while the page maps carry free bits is a contradiction the repair tool
-    // reports as "PMap page has free bits, but the header says it doesn't".
-    std::memset(h.data() + 384, 0xFF, 128);  // rgbFP: full unless cleared below
-    {
-        std::size_t index = 0;
-        for (std::uint64_t ib = kFirstPMapPos; ib < file_end_ && index < 128 * 8;
-             ib += kPMapSpan, ++index) {
-            bool has_free = false;
-            for (std::uint64_t page = ib; page < ib + kPMapSpan && page < file_end_;
-                 page += kPageSize) {
-                if (page < kFirstAMapPos) continue;
-                const std::size_t map =
-                    static_cast<std::size_t>((page - kFirstAMapPos) / kAMapSpan);
-                if (map >= amaps_.size()) continue;
-                const std::uint64_t base = kFirstAMapPos + map * kAMapSpan;
-                const std::uint64_t slot = (page - base) / kBlockAlign;
-                bool used = false;
-                for (int k = 0; k < 8 && !used; ++k) {
-                    const std::uint64_t s = slot + k;
-                    if (s / 8 < amaps_[map].size() &&
-                        (amaps_[map][s / 8] & (0x80u >> (s % 8)))) {
-                        used = true;
-                    }
-                }
-                if (!used) { has_free = true; break; }
-            }
-            if (has_free) {
-                h[384 + index / 8] &= static_cast<std::uint8_t>(~(0x80u >> (index % 8)));
-            }
-        }
-    }
+    // rgbFP is left saturated. The repair tool objects that the page maps carry
+    // free bits while this says they do not, but clearing the bits the way that
+    // complaint implies stops Outlook opening the file at all -- a store that
+    // opened with this saturated stopped opening once it was computed. The
+    // polarity here is a guess either way, and this is the guess that works.
+    std::memset(h.data() + 384, 0xFF, 128);  // rgbFP
 
     h[512] = 0x80;  // bSentinel
     h[513] = 0x00;  // bCryptMethod: NDB_CRYPT_NONE

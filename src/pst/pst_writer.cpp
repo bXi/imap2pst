@@ -509,6 +509,13 @@ void PstWriter::writeReservedNodes() {
     // scratch, only in one it has repaired.
     ndb_.addNode(kNidSearchDomainObject, 0, 0, 0);
 
+    // Note: node 0xEE1 is deliberately NOT written. Outlook's own files carry a
+    // flat list there with one 28-byte record per object, and it looked like
+    // the missing piece because it is the only structure that grows with folder
+    // count -- but writing it, byte-for-byte in Outlook's format, stops even a
+    // bare store from opening. Its payload fields evidently mean something this
+    // writer does not know how to fill.
+
     // Outlook's two internal indexes, both a heap holding a single B-tree: the
     // first keyed by a 16-byte identifier, the second by a 32-bit one, each
     // mapping to a node id.  They are written empty for Outlook to fill.  The

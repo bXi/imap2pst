@@ -106,6 +106,9 @@ inline constexpr Nid kNidSearchDomainObject  = 0x261;
 // creating" for a store that does not.
 inline constexpr Nid kNidHmpGuidMap          = 0xC01;
 inline constexpr Nid kNidHmpIdMap            = 0xE01;
+// A flat list with one record per object in the store.  Outlook builds it if it
+// is missing, and it is the only structure here that grows with folder count.
+inline constexpr Nid kNidObjectList           = 0xEE1;
 // Subnode identifiers used inside a message node.
 inline constexpr Nid kNidRecipientTable      = 0x692;
 inline constexpr Nid kNidAttachmentTable     = 0x671;

@@ -77,20 +77,11 @@ TEST(PstHeader, MagicVersionAndChecksums) {
     for (int i = 0; i < 128; ++i) {
         EXPECT_EQ(h[256 + i], 0xFF) << "rgbFM[" << i << "]";
     }
-    // rgbFP must agree with the page maps about where free space is. A bit set
-    // means "that page map is full"; claiming every map is full while the maps
-    // themselves carry free bits is a contradiction the repair tool reports.
-    std::size_t index = 0;
-    for (std::uint64_t ib = kFirstPMapPos; ib < r.size(); ib += kPMapSpan, ++index) {
-        bool has_free = false;
-        for (std::size_t bit = 0; bit < 496 * 8 && !has_free; ++bit) {
-            if ((*r.at(ib + bit / 8) & (0x80u >> (bit % 8))) == 0) has_free = true;
-        }
-        const bool says_full = (h[384 + index / 8] & (0x80u >> (index % 8))) != 0;
-        EXPECT_NE(has_free, says_full)
-            << "rgbFP disagrees with page map " << index;
+    // rgbFP stays saturated; see the note in writeHeader.  scanpst reports the
+    // inconsistency, Outlook needs it this way.
+    for (int i = 0; i < 128; ++i) {
+        EXPECT_EQ(h[384 + i], 0xFF) << "rgbFP[" << i << "]";
     }
-    EXPECT_GT(index, 0u) << "expected at least one page map";
 }
 
 TEST(PstHeader, RootPointsAtTheRealEndOfFile) {
