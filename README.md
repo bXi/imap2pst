@@ -233,12 +233,37 @@ likely you are to hit them:
 
 **Outlook**
 
-Partly verified. A generated PST opens in Outlook (build 16.0.10417.20207)
-**after** its Inbox Repair Tool has been run over it, with folder hierarchy,
-message bodies, attachments and non-ASCII subjects, sender names and folder
-names all intact. Outlook still will not open one directly, so this is not yet
-a usable result -- the most likely cause is the reserved furniture listed below,
-which the repair tool builds and this writer does not.
+Partly working, and this is the project's main open problem.
+
+* A store with **no user folders** opens in Outlook directly (build
+  16.0.10417.20207).
+* A store with **any user folder** does not. Outlook's PST provider,
+  `mspst32.dll`, throws HRESULT `0x80040813` at a fixed offset while binding the
+  store; the Inbox Repair Tool fails the same way with `0x800408C1`, both during
+  "walk all folders".
+* Running the Inbox Repair Tool over such a file fixes it, after which Outlook
+  opens it with folder hierarchy, message bodies, attachments and non-ASCII
+  subjects, sender names and folder names all intact. So the content is right;
+  something about how it is indexed is not.
+
+What has been ruled out, by comparing against both a store Outlook created from
+scratch and stores it repaired from ours: folder property contexts, all three
+per-folder tables, their column layouts, row bytes and row-index B-trees are
+byte-for-byte equivalent to Outlook's own. Total folder count is not the
+trigger; a seven-folder store can fail where an eight-folder one succeeds.
+
+Known remaining differences from a store Outlook produces, any of which may
+matter: node `0xC01` is written empty where Outlook populates it with a
+sixteen-byte identifier per folder; nodes `0xEE1` and `0xF01` are not written at
+all; the search folders and their update queues are absent. Writing `0xEE1` in
+Outlook's exact format makes matters worse rather than better, so its payload
+carries meaning not yet understood.
+
+Two cautions for anyone continuing this. The repair tool's complaints are
+advisory -- it repairs the file regardless -- and acting on them has twice
+broken a configuration that previously opened. And a PST that Outlook has opened
+is no longer the file that was written: it adds its own search folders on first
+open, so re-testing or diffing such a file measures the wrong thing.
 
 Getting there took four rounds of Outlook's Inbox Repair Tool, and the log it
 writes is by far the best diagnostic available for this format — worth reaching
