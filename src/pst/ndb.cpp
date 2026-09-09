@@ -361,26 +361,11 @@ void NdbWriter::emitFixedPages() {
         amap_free_ += static_cast<std::uint64_t>(n) * kBlockAlign;
     }
 
-    // Density list.  This is how a writer finds space quickly, and leaving it
-    // empty says the file is completely full: Outlook opens a store for
-    // writing and allocates immediately, so an empty list plus a fully
-    // allocated PMap leaves it nowhere to go.
+    // Density list: present but empty.  Outlook writes bFlags 0 and no entries
+    // in both the stores it creates and the ones it repairs, so an empty list
+    // is what a reader expects rather than a hint it is missing out on.
     {
         std::vector<std::uint8_t> body(496, 0);
-        std::size_t count = 0;
-        std::uint32_t current = 0;
-        for (std::size_t i = 0; i < amaps_.size() && count < 119; ++i) {
-            if (free_slots[i] == 0) continue;
-            if (count == 0) current = static_cast<std::uint32_t>(i);
-            // Low 20 bits are the AMap index, the top 12 the free slot count.
-            const std::uint32_t slots = std::min<std::uint32_t>(free_slots[i], 0xFFF);
-            poke32(body.data() + 8 + count * 4,
-                   (static_cast<std::uint32_t>(i) & 0xFFFFFu) | (slots << 20));
-            ++count;
-        }
-        body[0] = 0x01;  // bFlags: the list is valid
-        body[1] = static_cast<std::uint8_t>(count);
-        poke32(body.data() + 4, current);
         write_page(kDListPos, kPTypeDList, body, /*signed_page=*/true);
     }
 
@@ -390,37 +375,14 @@ void NdbWriter::emitFixedPages() {
                    /*signed_page=*/false);
     }
 
-    // Page maps, derived from the allocation maps: a 512-byte page counts as
-    // allocated when any of the eight 64-byte slots inside it is.
+    // Page maps, written fully allocated.  Outlook does the same -- a store it
+    // creates has every PMap bit set and cbPMapFree zero while its allocation
+    // map shows most of the file free -- because the AMap is the allocator and
+    // the PMap is vestigial.  Deriving the PMap from the AMap instead, as this
+    // did for a while, produces a file no Outlook-written store resembles.
     pmap_free_ = 0;
     for (std::uint64_t ib = kFirstPMapPos; ib < file_end_; ib += kPMapSpan) {
-        std::vector<std::uint8_t> body(496, 0);
-        for (std::size_t bit = 0; bit < 496 * 8; ++bit) {
-            const std::uint64_t page_ib = ib - kFirstPMapPos + bit * kPageSize;
-            bool used = page_ib >= file_end_;  // outside the file
-            if (!used && page_ib >= kFirstAMapPos) {
-                const std::size_t map =
-                    static_cast<std::size_t>((page_ib - kFirstAMapPos) / kAMapSpan);
-                if (map < amaps_.size()) {
-                    const std::uint64_t base = kFirstAMapPos + map * kAMapSpan;
-                    const std::uint64_t first = (page_ib - base) / kBlockAlign;
-                    for (int k = 0; k < 8; ++k) {
-                        const std::uint64_t s = first + k;
-                        if (s / 8 < amaps_[map].size() &&
-                            (amaps_[map][s / 8] & (0x80u >> (s % 8)))) {
-                            used = true;
-                            break;
-                        }
-                    }
-                } else {
-                    used = true;
-                }
-            } else if (!used) {
-                used = true;  // the header region
-            }
-            if (used) body[bit / 8] |= static_cast<std::uint8_t>(0x80u >> (bit % 8));
-            else pmap_free_ += kPageSize;
-        }
+        std::vector<std::uint8_t> body(496, 0xFF);
         write_page(ib, kPTypePMap, body, /*signed_page=*/false);
     }
 }
