@@ -495,6 +495,28 @@ void PstWriter::writeReservedNodes() {
         ndb_.addNode(kNidSearchActivityList, data, 0, 0);
     }
 
+    // The search domain object carries no data in a store Outlook creates from
+    // scratch, only in one it has repaired.
+    ndb_.addNode(kNidSearchDomainObject, 0, 0, 0);
+
+    // Outlook's two internal indexes, both a heap holding a single B-tree: the
+    // first keyed by a 16-byte identifier, the second by a 32-bit one, each
+    // mapping to a node id.  They are written empty for Outlook to fill.  The
+    // client signatures are values [MS-PST] lists as reserved, read out of a
+    // store Outlook produced.
+    struct Index {
+        Nid nid;
+        std::uint8_t client_sig;
+        std::uint8_t key_size;
+    };
+    for (const Index& ix : {Index{kNidHmpGuidMap, kHnSigHmpGuid, 16},
+                            Index{kNidHmpIdMap, kHnSigHmpId, 4}}) {
+        HeapNode hn(ix.client_sig);
+        hn.setUserRoot(buildBth(hn, ix.key_size, 4, {}));
+        SubnodeAllocator subs(ndb_);
+        writeNodeFromHeap(ix.nid, 0, hn.serialize(), subs);
+    }
+
     // These exist in the node tree with no data block at all -- the repaired
     // file records them as bidData 0, bidSub 0 -- so they are placeholders the
     // store is expected to declare rather than objects with content.

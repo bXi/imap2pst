@@ -100,6 +100,12 @@ inline constexpr Nid kNidNormalFolderTemplate= 0xA1;
 inline constexpr Nid kNidRootFolder          = 0x122;
 inline constexpr Nid kNidSearchManagementQ   = 0x1E1;
 inline constexpr Nid kNidSearchActivityList  = 0x201;
+inline constexpr Nid kNidSearchDomainObject  = 0x261;
+// Two internal indexes Outlook keeps for itself.  A store it creates from
+// scratch always has them, and its repair tool reports "HMP not found -
+// creating" for a store that does not.
+inline constexpr Nid kNidHmpGuidMap          = 0xC01;
+inline constexpr Nid kNidHmpIdMap            = 0xE01;
 // Subnode identifiers used inside a message node.
 inline constexpr Nid kNidRecipientTable      = 0x692;
 inline constexpr Nid kNidAttachmentTable     = 0x671;
@@ -124,6 +130,8 @@ constexpr bool hnidIsHid(Hnid v) { return (v & 0x1F) == 0; }
 
 // ----------------------------------------------------------- HN client sigs
 enum HeapClientSig : std::uint8_t {
+    kHnSigHmpGuid = 0x9C,  // reserved by [MS-PST]; used by the 0xC01 index
+    kHnSigHmpId   = 0xCC,  // reserved by [MS-PST]; used by the 0xE01 index
     kHnSigTC  = 0x7C,
     kHnSigBTH = 0xB5,
     kHnSigPC  = 0xBC,
