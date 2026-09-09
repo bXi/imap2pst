@@ -391,6 +391,22 @@ TEST(PstHeap, BthKeysNeverStartAtZero) {
     EXPECT_GT(bths, 5u) << "expected to have inspected several BTHs";
 }
 
+TEST(PstNodes, RootFolderIsItsOwnParent) {
+    // Outlook walks up the folder tree until a folder's parent is itself.  With
+    // a parent of zero it follows a node identifier that was never written.
+    TempPst tmp;
+    writeSample(tmp.path(), 5);
+    const Reader r(readAll(tmp.path()));
+
+    bool seen = false;
+    for (const auto& e : r.nodeEntries()) {
+        if (e.nid != kNidRootFolder) continue;
+        seen = true;
+        EXPECT_EQ(e.parent, kNidRootFolder) << "root folder must be its own parent";
+    }
+    EXPECT_TRUE(seen) << "root folder node missing";
+}
+
 TEST(PstNodes, ReservedNodesArePresent) {
     TempPst tmp;
     writeSample(tmp.path(), 5);

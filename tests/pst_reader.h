@@ -137,6 +137,25 @@ class Reader {
         return out;
     }
 
+    struct NodeEntry {
+        Nid nid = 0;
+        Bid data = 0;
+        Bid sub = 0;
+        Nid parent = 0;
+    };
+
+    std::vector<NodeEntry> nodeEntries() const {
+        std::vector<std::vector<std::uint8_t>> leaves;
+        walk(nbtRoot(), kPTypeNBT, 0, &leaves, nullptr);
+        std::vector<NodeEntry> out;
+        for (const auto& e : leaves) {
+            out.push_back({static_cast<Nid>(peek64(e.data())), peek64(e.data() + 8),
+                           peek64(e.data() + 16),
+                           static_cast<Nid>(peek32(e.data() + 24))});
+        }
+        return out;
+    }
+
     std::vector<Nid> nodes() const {
         std::vector<std::vector<std::uint8_t>> leaves;
         walk(nbtRoot(), kPTypeNBT, 0, &leaves, nullptr);

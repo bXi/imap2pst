@@ -56,6 +56,10 @@ PstWriter::PstWriter(const std::string& path) : ndb_(path) {
     // The root node of the folder tree, then the subtree everything the user
     // can see hangs off.
     makeFolder(0, "Root - Mailbox", kNidRootFolder);
+    // The root folder is its own parent.  A reader walking up the folder tree
+    // uses that as the terminator; a parent of zero sends it to a node that
+    // does not exist, and Outlook faults on it before it opens anything.
+    folders_.front().parent = kNidRootFolder;
     ipm_subtree_ = makeFolder(kNidRootFolder, "Top of Personal Folders", 0);
 
     // Every folder the message store advertises has to be real.  Aliasing them
