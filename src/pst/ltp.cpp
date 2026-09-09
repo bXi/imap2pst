@@ -116,6 +116,11 @@ bool PropertyContext::has(PropTag tag) const {
 }
 
 std::vector<std::uint8_t> PropertyContext::serialize(SubnodeAllocator& subs) const {
+    // Note that an empty value still gets a zero-length heap allocation rather
+    // than HNID zero: a reader treats HNID zero as "property absent", which for
+    // something like the name-to-id map's entry stream is not the same thing as
+    // "present and empty" and makes the file unreadable.  HNPAGEMAP.cFree
+    // counts those slots, which is what Outlook validates.
     HeapNode hn(kHnSigPC);
 
     std::vector<BthRecord> records;
@@ -124,10 +129,6 @@ std::vector<std::uint8_t> PropertyContext::serialize(SubnodeAllocator& subs) con
         std::uint32_t hnid;
         if (v.kind == Value::Kind::kInline || v.kind == Value::Kind::kSpilled) {
             hnid = v.hnid;
-        } else if (v.bytes.empty()) {
-            // An empty variable-length value is HNID zero.  Allocating a
-            // zero-length heap item instead would read back as a freed slot.
-            hnid = 0;
         } else if (v.bytes.size() <= HeapNode::maxAllocSize()) {
             hnid = hn.alloc(v.bytes);
         } else {

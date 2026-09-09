@@ -47,6 +47,9 @@ endif()
 add_executable(pst_fixture_writer pst_fixture_writer.cpp)
 target_link_libraries(pst_fixture_writer PRIVATE imap2pst_pst)
 
+add_executable(pst_minimal_writer pst_minimal_writer.cpp)
+target_link_libraries(pst_minimal_writer PRIVATE imap2pst_pst)
+
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
   set(_roundtrip_pst  ${CMAKE_CURRENT_BINARY_DIR}/roundtrip.pst)
@@ -62,6 +65,18 @@ if(Python3_Interpreter_FOUND)
                    ${_roundtrip_pst} ${_roundtrip_json})
   set_tests_properties(pst_roundtrip_verify_libpff PROPERTIES
     FIXTURES_REQUIRED roundtrip
+    SKIP_RETURN_CODE 77)
+  # A store with no named properties of its own still has to be readable.
+  set(_minimal_pst ${CMAKE_CURRENT_BINARY_DIR}/minimal.pst)
+  add_test(NAME pst_minimal_write COMMAND pst_minimal_writer ${_minimal_pst})
+  set_tests_properties(pst_minimal_write PROPERTIES FIXTURES_SETUP minimal)
+
+  add_test(NAME pst_minimal_verify_libpff
+           COMMAND ${Python3_EXECUTABLE}
+                   ${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_pst.py
+                   --open-only ${_minimal_pst})
+  set_tests_properties(pst_minimal_verify_libpff PROPERTIES
+    FIXTURES_REQUIRED minimal
     SKIP_RETURN_CODE 77)
 else()
   message(STATUS "Python3 not found; the libpff round-trip test is disabled")

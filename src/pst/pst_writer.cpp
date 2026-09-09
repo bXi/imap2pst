@@ -45,6 +45,14 @@ PstWriter::PstWriter(const std::string& path) : ndb_(path) {
     std::random_device rd;
     for (auto& b : store_guid_) b = static_cast<std::uint8_t>(rd() & 0xFF);
 
+    // A store with no named properties at all leaves the name-to-id map's entry
+    // stream empty, and a reader that expects it to exist cannot open the file.
+    // Real stores always carry at least this one -- it backs Outlook categories
+    // -- so registering it up front keeps the map well formed for a mailbox
+    // whose messages happen to have no unrecognised headers.
+    names_.idForString(kPsPublicStrings, "Keywords");
+    names_.ensureGuid(kPsInternetHeaders);
+
     // The root node of the folder tree, then the subtree everything the user
     // can see hangs off.
     makeFolder(0, "Root - Mailbox", kNidRootFolder);
@@ -232,8 +240,10 @@ void PstWriter::addMessage(FolderId folder_id, const Message& msg) {
                      msg.from.name.empty() ? msg.from.email : msg.from.name);
     }
     pc.setString(PR_DISPLAY_TO, joinMailboxes(msg.to));
-    pc.setString(PR_DISPLAY_CC, joinMailboxes(msg.cc));
-    pc.setString(PR_DISPLAY_BCC, joinMailboxes(msg.bcc));
+    // Only written when there is something to write: an empty property costs a
+    // heap slot and tells a reader nothing.
+    if (!msg.cc.empty()) pc.setString(PR_DISPLAY_CC, joinMailboxes(msg.cc));
+    if (!msg.bcc.empty()) pc.setString(PR_DISPLAY_BCC, joinMailboxes(msg.bcc));
 
     const std::int64_t delivered = msg.delivery_time ? msg.delivery_time : msg.date;
     const std::int64_t sent = msg.date ? msg.date : msg.delivery_time;

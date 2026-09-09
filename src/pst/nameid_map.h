@@ -55,6 +55,13 @@ class NameIdMap {
 
     std::size_t size() const { return entries_.size(); }
 
+    // Puts `guid` in the GUID stream without giving it a property.  A reader
+    // may require that stream to be non-empty, and the two predefined GUIDs
+    // (PS_MAPI and PS_PUBLIC_STRINGS) are referenced by index and contribute no
+    // bytes to it, so a store whose only named properties use those would
+    // otherwise leave it empty.
+    void ensureGuid(const Guid& guid) { guidIndex(guid); }
+
     // Builds the PC that node 0x61 stores.
     PropertyContext buildPropertyContext() const;
 

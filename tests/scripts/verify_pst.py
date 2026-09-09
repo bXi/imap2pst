@@ -158,6 +158,31 @@ def verify_named_properties(pff_file, expected_names):
 
 
 def main(argv):
+    # --open-only checks that libpff can open and walk the file at all, which
+    # is enough to catch a malformed name-to-id map.
+    if len(argv) == 3 and argv[1] == "--open-only":
+        pff_file = pypff.file()
+        pff_file.open(argv[2])
+        try:
+            root = find_root_folder(pff_file)
+            count = [0]
+
+            def walk(folder):
+                count[0] += folder.number_of_sub_messages
+                for i in range(folder.number_of_sub_messages):
+                    folder.get_sub_message(i).subject
+                for i in range(folder.number_of_sub_folders):
+                    walk(folder.get_sub_folder(i))
+
+            walk(root)
+        except Failure as failure:
+            sys.stderr.write("FAIL: %s\n" % failure)
+            return 1
+        finally:
+            pff_file.close()
+        print("opened and walked %d message(s) via libpff" % count[0])
+        return 0
+
     if len(argv) != 3:
         sys.stderr.write(__doc__)
         return 2
