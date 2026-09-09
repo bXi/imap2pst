@@ -99,6 +99,7 @@ inline constexpr Nid kNidNameToIdMap         = 0x61;
 inline constexpr Nid kNidNormalFolderTemplate= 0xA1;
 inline constexpr Nid kNidRootFolder          = 0x122;
 inline constexpr Nid kNidSearchManagementQ   = 0x1E1;
+inline constexpr Nid kNidSearchActivityList  = 0x201;
 // Subnode identifiers used inside a message node.
 inline constexpr Nid kNidRecipientTable      = 0x692;
 inline constexpr Nid kNidAttachmentTable     = 0x671;

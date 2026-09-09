@@ -110,6 +110,8 @@ inline constexpr PropTag PR_CONVERSATION_ID         = makeTag(0x3013, kPtBinary)
 inline constexpr PropTag PR_SECURE_SUBMIT_FLAGS     = makeTag(0x65C6, kPtLong);
 inline constexpr PropTag PR_PST_HIDDEN_COUNT        = makeTag(0x6635, kPtLong);
 inline constexpr PropTag PR_PST_HIDDEN_UNREAD       = makeTag(0x6636, kPtLong);
+// The folder a receive-folder-table row points at.
+inline constexpr PropTag PR_PST_RECEIVE_FOLDER      = makeTag(0x6605, kPtLong);
 inline constexpr PropTag PR_SEARCH_KEY              = makeTag(0x300B, kPtBinary);
 // Columns Outlook requires a recipient table to declare.
 inline constexpr PropTag PR_RESPONSIBILITY          = makeTag(0x0E0F, kPtBoolean);

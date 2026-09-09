@@ -469,12 +469,30 @@ void PstWriter::writeReservedNodes() {
         {makeNid(static_cast<NidType>(0x18), 0x37), {0x0E330014, 0x30070040}},
     };
 
+    const Nid receive_folder_nid = makeNid(kNidTypeReceiveFolderTable, 0x31);
     for (const auto& t : kTemplates) {
         TableContext tc;
         for (PropTag tag : t.columns) tc.addColumn(tag);
+        if (t.nid == receive_folder_nid) {
+            // Not a template: this one is live, and Outlook wants a default
+            // entry -- an empty message class, meaning "anything not matched
+            // by a more specific row" -- or it reports the table as having no
+            // default. A PST does not receive mail, so it points at the
+            // subtree everything else hangs off.
+            const std::size_t row = tc.addRow(ipm_subtree_);
+            tc.setString(row, PR_MESSAGE_CLASS, "");
+            tc.setInt32(row, PR_PST_RECEIVE_FOLDER, ipm_subtree_);
+        }
         SubnodeAllocator subs(ndb_);
         const auto heap = tc.serialize(subs);
         writeNodeFromHeap(t.nid, 0, heap, subs);
+    }
+
+    // The search activity list.  Nothing in a freshly written store is being
+    // searched, so it is present and empty rather than absent.
+    {
+        const Bid data = ndb_.writeData(nullptr, 0);
+        ndb_.addNode(kNidSearchActivityList, data, 0, 0);
     }
 
     // These exist in the node tree with no data block at all -- the repaired
