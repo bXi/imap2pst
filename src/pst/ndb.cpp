@@ -72,6 +72,17 @@ std::uint64_t NdbWriter::allocate(std::uint64_t cb) {
     return ib;
 }
 
+std::uint64_t NdbWriter::allocatePage() {
+    // A page's absolute file offset must be a multiple of its size.  Blocks are
+    // allocated in 64-byte units, so by the time a page is written the cursor
+    // is rarely on a 512-byte boundary: skip forward to one.  Outlook rejects a
+    // store whose pages sit anywhere else with "Page has misaligned or zero ib"
+    // and fails fast, which is not something any reader reports as a bad page,
+    // and libpff does not mind at all.
+    cursor_ = alignUp(cursor_, kPageSize);
+    return allocate(kPageSize);
+}
+
 void NdbWriter::ensureAMapCount(std::size_t n) {
     while (amaps_.size() < n) {
         const std::size_t index = amaps_.size();
@@ -272,7 +283,7 @@ NdbWriter::Bref NdbWriter::finishBTPage(std::vector<std::uint8_t>& page,
     page[491] = level;
     // page[492..495] is dwPadding, already zero.
 
-    const std::uint64_t ib = allocate(kPageSize);
+    const std::uint64_t ib = allocatePage();
     const Bid bid = makeBid(next_bid_index_++, /*internal=*/false);
     std::uint8_t* t = page.data() + 496;
     t[0] = page_type;

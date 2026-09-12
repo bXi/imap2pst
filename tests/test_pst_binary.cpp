@@ -436,6 +436,30 @@ TEST(PstAllocation, FreeSpaceIsBackedByTheFile) {
     }
 }
 
+TEST(PstBTrees, PagesAreAlignedToTheirSize) {
+    // A page's absolute file offset must be a multiple of 512.  Blocks are
+    // allocated in 64-byte units, so a page written straight after one lands
+    // misaligned unless the cursor is advanced first.  Outlook fail-fasts on
+    // such a store with "Page has misaligned or zero ib"; libpff reads it
+    // without complaint, so nothing else here would catch it.
+    for (int messages : {0, 1, 2, 3, 4, 17}) {
+        TempPst tmp;
+        writeSample(tmp.path(), messages);
+        const Reader r(readAll(tmp.path()));
+        for (std::uint64_t page : r.btreePages()) {
+            EXPECT_EQ(page % kPageSize, 0u)
+                << "B-tree page at 0x" << std::hex << page << " is misaligned ("
+                << std::dec << messages << " messages)";
+            EXPECT_NE(page, 0u) << "page at offset zero";
+        }
+        // The fixed pages are at hard-coded offsets, but check them anyway.
+        EXPECT_EQ(kDListPos % kPageSize, 0u);
+        for (std::uint64_t ib = kFirstAMapPos; ib < r.size(); ib += kAMapSpan) {
+            EXPECT_EQ(ib % kPageSize, 0u);
+        }
+    }
+}
+
 TEST(PstNodes, ReservedNodesArePresent) {
     TempPst tmp;
     writeSample(tmp.path(), 5);

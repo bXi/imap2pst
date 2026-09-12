@@ -83,6 +83,9 @@ class NdbWriter {
     // --- space management ---------------------------------------------------
     static bool isReservedPage(std::uint64_t ib);
     std::uint64_t allocate(std::uint64_t cb);
+    // Pages must start on a 512-byte boundary.  Blocks only need 64-byte
+    // alignment, so the cursor is usually somewhere in between.
+    std::uint64_t allocatePage();
     void markAllocated(std::uint64_t ib, std::uint64_t cb);
     void ensureAMapCount(std::size_t n);
 
