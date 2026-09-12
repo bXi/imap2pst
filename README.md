@@ -233,58 +233,41 @@ likely you are to hit them:
 
 **Outlook**
 
-Partly working, and this is the project's main open problem.
+Verified. A generated PST opens directly in Outlook (build 16.0.10417.20207)
+-- no repair pass -- with folder hierarchy, nested folders, message bodies,
+attachments, and non-ASCII subjects, sender names and folder names intact.
 
-* A store with **no user folders** opens in Outlook directly (build
-  16.0.10417.20207).
-* A store with **any user folder** does not. Outlook's PST provider,
-  `mspst32.dll`, throws HRESULT `0x80040813` at a fixed offset while binding the
-  store; the Inbox Repair Tool fails the same way with `0x800408C1`, both during
-  "walk all folders".
-* Running the Inbox Repair Tool over such a file fixes it, after which Outlook
-  opens it with folder hierarchy, message bodies, attachments and non-ASCII
-  subjects, sender names and folder names all intact. So the content is right;
-  something about how it is indexed is not.
+Getting there took eleven format fixes, and the last one is worth knowing about
+if you touch the NDB layer: **a page's absolute file offset must be a multiple
+of 512**. Blocks are allocated in 64-byte units, so a page written straight
+after one lands misaligned unless the cursor is advanced first. Outlook
+fail-fasts out of `mspst32.dll` with HRESULT `0x80040813` and the internal
+message "Page has misaligned or zero ib". Nothing else detects it: libpff reads
+such a file perfectly, the repair tool rebuilds both B-trees rather than
+reporting the offset, and the page contents are entirely valid -- only their
+position is wrong, which no structural comparison looks at.
 
-What has been ruled out, by comparing against both a store Outlook created from
-scratch and stores it repaired from ours: folder property contexts, all three
-per-folder tables, their column layouts, row bytes and row-index B-trees are
-byte-for-byte equivalent to Outlook's own. Total folder count is not the
-trigger; a seven-folder store can fail where an eight-folder one succeeds.
+That defect is also a lesson in how it presents. Whether a page happened to land
+aligned depended on how many blocks preceded it, so the failure tracked folder
+count and placement while following no rule that made sense: one folder under an
+empty parent worked, two did not; a subtree with three children worked, two or
+four did not. Hours went into hypotheses about child counts and hierarchy
+tables. The answer came from attaching a debugger, breaking on the exception,
+and reading the format string beside the error code -- worth doing early once a
+failure proves deterministic.
 
-Known remaining differences from a store Outlook produces, any of which may
-matter: node `0xC01` is written empty where Outlook populates it with a
-sixteen-byte identifier per folder; nodes `0xEE1` and `0xF01` are not written at
-all; the search folders and their update queues are absent. Writing `0xEE1` in
-Outlook's exact format makes matters worse rather than better, so its payload
-carries meaning not yet understood.
+Two further cautions. The repair tool's complaints are advisory -- it repairs the
+file regardless -- and acting on them twice broke a configuration that
+previously opened. And a PST that Outlook has opened is no longer the file that
+was written, because it adds its own search folders on first open; diffing one of
+those measures the wrong thing.
 
-Two cautions for anyone continuing this. The repair tool's complaints are
-advisory -- it repairs the file regardless -- and acting on them has twice
-broken a configuration that previously opened. And a PST that Outlook has opened
-is no longer the file that was written: it adds its own search folders on first
-open, so re-testing or diffing such a file measures the wrong thing.
-
-Getting there took four rounds of Outlook's Inbox Repair Tool, and the log it
-writes is by far the best diagnostic available for this format — worth reaching
-for before guessing. Two lessons are baked into the code and its tests:
-
-* A single wrong field cascades. A bad AMap page BID made Outlook report every
-  B-tree page as unallocated, rebuild both trees, and declare the message store
-  and root folder missing; all of it was present. Check any complaint against
-  the bytes before acting on it.
-* Passing the repair tool is not the same as opening. scanpst repairs as it
-  validates, so it will report a file as nearly clean that Outlook still
-  refuses. The last crash was a `PidTagValidFolderMask` that promised inbox and
-  views entry ids the file never contained — self-consistent as a number, so the
-  validator had nothing to object to, and fatal to a reader that follows it.
-
-Still reported by the repair tool, and not yet written: the receive folder
-table, the search folders' update queues, the search activity list, the folder
-templates and the outgoing queue. Outlook builds these itself and opens the file
-without them. `PidTagAttachSize` is also still rejected; its exact derivation is
-undocumented and the current value is the sum of the attachment's property
-sizes.
+Still reported by the repair tool, though Outlook opens the file regardless: the
+search folders and their update queues, and node `0xEE1`, a flat list with one
+record per object that Outlook builds for itself. Writing `0xEE1` in Outlook's
+exact format stops even a bare store from opening, so its payload carries
+meaning this writer does not understand -- see the comment in
+`PstWriter::writeReservedNodes`.
 
 **Transport**
 
