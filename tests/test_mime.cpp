@@ -124,6 +124,36 @@ TEST(MimeCharset, RawLatin1InUndeclaredHeadersFallsBack) {
     EXPECT_EQ(m.subject.find("\xEF\xBF\xBD"), std::string::npos);
 }
 
+TEST(MimeMultipart, InlineImagesReferencedByCidAreKept) {
+    // vmime models a cid:-referenced image as an "embedded object" of the HTML
+    // part rather than an attachment, so walking getAttachmentList() alone
+    // drops every inline image in a real mailbox.
+    const Message m = parse(test::readFixture("inline_image.eml"));
+    ASSERT_EQ(m.attachments.size(), 2u);
+
+    const Attachment* inlined = nullptr;
+    const Attachment* regular = nullptr;
+    for (const auto& a : m.attachments) {
+        if (a.is_inline) inlined = &a;
+        else regular = &a;
+    }
+    ASSERT_NE(inlined, nullptr) << "the inline image was dropped";
+    ASSERT_NE(regular, nullptr);
+
+    EXPECT_EQ(inlined->content_id, "pic@example.com");
+    EXPECT_EQ(inlined->content_type, "image/png");
+    ASSERT_GE(inlined->data.size(), 8u);
+    // A PNG signature, so we know the payload survived transfer decoding.
+    EXPECT_EQ(inlined->data[0], 0x89);
+    EXPECT_EQ(inlined->data[1], 'P');
+    EXPECT_EQ(inlined->data[2], 'N');
+    EXPECT_EQ(inlined->data[3], 'G');
+
+    EXPECT_EQ(regular->filename, "notes.txt");
+    EXPECT_FALSE(regular->is_inline);
+    EXPECT_NE(m.body_html.find("cid:pic@example.com"), std::string::npos);
+}
+
 TEST(MimeImapState, CarriesFlagsAndInternalDateThrough) {
     RawMessage raw;
     raw.uid = 4242;

@@ -172,11 +172,37 @@ void collectTextParts(const vmime::messageParser& mp, Message* out) {
         const std::string utf8_body = toUtf8(body, part->getCharset());
         if (part->getType().getSubType() == vmime::mediaTypes::TEXT_HTML) {
             if (out->body_html.empty()) out->body_html = utf8_body;
-            // vmime keeps a plain-text alternative alongside the HTML part.
             const auto html = vmime::dynamicCast<const vmime::htmlTextPart>(part);
-            if (html && out->body_text.empty()) {
-                const std::string plain = extract(html->getPlainText());
-                if (!plain.empty()) out->body_text = toUtf8(plain, html->getCharset());
+            if (html) {
+                // vmime keeps a plain-text alternative alongside the HTML part.
+                if (out->body_text.empty()) {
+                    const std::string plain = extract(html->getPlainText());
+                    if (!plain.empty()) out->body_text = toUtf8(plain, html->getCharset());
+                }
+                // Images referenced from the HTML by cid: are "embedded
+                // objects" here, not attachments, so they never appear in
+                // getAttachmentList().  They are still parts of the message and
+                // have to be carried over, or every inline image in a real
+                // mailbox is silently dropped.
+                for (std::size_t k = 0; k < html->getObjectCount(); ++k) {
+                    const auto obj = html->getObjectAt(k);
+                    if (!obj) continue;
+                    Attachment a;
+                    a.is_inline = true;
+                    a.content_id = stripAngles(obj->getId());
+                    // vmime reports the id as "cid:xxx" when that is how the
+                    // HTML referenced it.
+                    if (a.content_id.compare(0, 4, "cid:") == 0) a.content_id.erase(0, 4);
+                    a.content_type =
+                        obj->getType().getType() + "/" + obj->getType().getSubType();
+                    const std::string data = extract(obj->getData());
+                    a.data.assign(data.begin(), data.end());
+                    if (a.filename.empty()) {
+                        a.filename = a.content_id.empty() ? ("inline" + std::to_string(k + 1))
+                                                          : a.content_id;
+                    }
+                    out->attachments.push_back(std::move(a));
+                }
             }
         } else if (out->body_text.empty()) {
             out->body_text = utf8_body;

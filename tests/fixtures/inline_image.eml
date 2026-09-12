@@ -1,0 +1,31 @@
+From: Sender <sender@example.com>
+To: Recipient <rcpt@example.com>
+Subject: Inline image and attachment
+Date: Sat, 12 Sep 2026 12:00:00 +0200
+Message-ID: <inline-008@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="MIXED"
+
+--MIXED
+Content-Type: multipart/related; boundary="REL"
+
+--REL
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>See <img src="cid:pic@example.com" alt="pic"></p></body></html>
+
+--REL
+Content-Type: image/png; name="tiny.png"
+Content-Transfer-Encoding: base64
+Content-ID: <pic@example.com>
+Content-Disposition: inline; filename="tiny.png"
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==
+--REL--
+
+--MIXED
+Content-Type: text/plain; name="notes.txt"
+Content-Disposition: attachment; filename="notes.txt"
+
+plain attachment body
+--MIXED--
