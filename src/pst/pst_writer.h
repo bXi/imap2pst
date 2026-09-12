@@ -84,6 +84,13 @@ class PstWriter {
     void writeNameIdMap();
     void writeFolders();
     void applyHeaderProperties(PropertyContext& pc, const Message& msg);
+    // Builds one message -- properties, recipients, attachments -- into `subs`.
+    // `embedded` marks a message that lives inside an attachment rather than in
+    // a folder.  Recursive: an embedded message may carry its own.
+    std::vector<std::uint8_t> buildMessage(const Message& msg, Nid nid,
+                                           SubnodeAllocator& subs, bool embedded,
+                                           std::uint32_t* out_flags,
+                                           std::uint32_t* out_size);
 
     // The column sets Outlook requires each kind of folder table to declare.
     static std::vector<PropTag> contentsColumns();

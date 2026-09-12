@@ -1,5 +1,7 @@
 #include "pst/pst_writer.h"
 
+#include "pst/crc.h"
+
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -37,6 +39,55 @@ bool isStructuredHeader(const std::string& name) {
         if (lower == k) return true;
     }
     return false;
+}
+
+// Wraps plain text as an RTF document inside the PidTagRtfCompressed envelope.
+//
+// The envelope ([MS-OXRTFCP]) can name itself compressed or uncompressed, but
+// the uncompressed form is not worth using: libpff runs its LZ decoder over the
+// payload whichever signature it finds, so a store using it would have an RTF
+// body no reader could open.  What is written instead is the compressed
+// container carrying nothing but literal tokens -- a flag byte of zeroes
+// followed by up to eight raw bytes, repeated.  Every decompressor handles
+// that, and there is no compressor here whose bugs could quietly corrupt a
+// body.
+std::vector<std::uint8_t> rtfFromPlainText(const std::string& text) {
+    std::string rtf =
+        "{\\rtf1\\ansi\\ansicpg65001\\fromtext\\deff0"
+        "{\\fonttbl{\\f0\\fswiss Arial;}}\n\\pard\\plain\\f0\\fs20 ";
+    for (char c : text) {
+        switch (c) {
+            case '\\': rtf += "\\\\"; break;
+            case '{':  rtf += "\\{"; break;
+            case '}':  rtf += "\\}"; break;
+            case '\n': rtf += "\\par\n"; break;
+            case '\r': break;
+            default:
+                // Bytes above ASCII are already UTF-8 and the codepage above
+                // says so, so they pass through untouched.
+                rtf.push_back(c);
+        }
+    }
+    rtf += "}";
+
+    // Literal-only LZFu: one flag byte per eight bytes, every bit clear.
+    std::vector<std::uint8_t> packed;
+    packed.reserve(rtf.size() + rtf.size() / 8 + 1);
+    for (std::size_t i = 0; i < rtf.size(); i += 8) {
+        packed.push_back(0);
+        const std::size_t n = std::min<std::size_t>(8, rtf.size() - i);
+        packed.insert(packed.end(), rtf.begin() + i, rtf.begin() + i + n);
+    }
+
+    std::vector<std::uint8_t> out;
+    put32(out, static_cast<std::uint32_t>(packed.size() + 12));  // cbSize
+    put32(out, static_cast<std::uint32_t>(rtf.size()));          // cbRawSize
+    put32(out, 0x75465A4Cu);                                     // "LZFu"
+    // Over the packed bytes, with the same weak CRC the rest of the format
+    // uses.  A reader checks this: libpff refuses the body when it disagrees.
+    put32(out, computeCrc(packed.data(), packed.size()));
+    out.insert(out.end(), packed.begin(), packed.end());
+    return out;
 }
 
 }  // namespace
@@ -207,39 +258,60 @@ void PstWriter::applyHeaderProperties(PropertyContext& pc, const Message& msg) {
     // Anything without a structured slot also becomes a named property under
     // PS_INTERNET_HEADERS so it survives as an addressable value, not just as
     // text inside the blob.  Repeated headers are joined with newlines.
+    // Keyed without regard to case, because that is how the name-to-id map
+    // mints ids: "Content-Type" and "Content-type" are one property, and
+    // merging them here is what keeps the second spelling from overwriting the
+    // first instead of joining it.
     std::vector<std::string> order;
     std::map<std::string, std::string> merged;
+    std::map<std::string, std::string> spelling;
     for (const auto& h : msg.headers) {
         if (isStructuredHeader(h.name)) continue;
-        auto it = merged.find(h.name);
+        std::string key = h.name;
+        std::transform(key.begin(), key.end(), key.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        auto it = merged.find(key);
         if (it == merged.end()) {
-            merged.emplace(h.name, h.value);
-            order.push_back(h.name);
+            merged.emplace(key, h.value);
+            spelling.emplace(key, h.name);
+            order.push_back(key);
         } else {
             it->second += "\n";
             it->second += h.value;
         }
     }
-    for (const auto& name : order) {
-        const std::uint16_t id = names_.idForString(kPsInternetHeaders, name);
+    for (const auto& key : order) {
+        const std::uint16_t id = names_.idForString(kPsInternetHeaders, spelling[key]);
         if (id == 0) break;  // name-to-id map is full; the blob still has it
-        pc.setString(makeTag(id, kPtUnicode), merged[name]);
+        pc.setString(makeTag(id, kPtUnicode), merged[key]);
     }
 }
 
-void PstWriter::addMessage(FolderId folder_id, const Message& msg) {
-    Folder& f = folder(folder_id);
-    const Nid nid = makeNid(kNidTypeNormalMessage, next_message_index_++);
-
-    SubnodeAllocator subs(ndb_);
+// Builds the property context, recipient table and attachment table for one
+// message into `subs`, and returns the serialized heap.  Both a message in a
+// folder and a message embedded in an attachment are built by this, which is
+// what lets a forwarded message carry its own recipients and attachments.
+std::vector<std::uint8_t> PstWriter::buildMessage(const Message& msg, Nid nid,
+                                                  SubnodeAllocator& subs,
+                                                  bool embedded,
+                                                  std::uint32_t* out_flags,
+                                                  std::uint32_t* out_size) {
     PropertyContext pc;
 
-    pc.setString(PR_MESSAGE_CLASS, "IPM.Note");
+    pc.setString(PR_MESSAGE_CLASS,
+                 msg.message_class.empty() ? "IPM.Note" : msg.message_class);
     pc.setString(PR_SUBJECT, msg.subject);
     pc.setString(PR_CONVERSATION_TOPIC, msg.subject);
     if (!msg.body_text.empty()) pc.setString(PR_BODY, msg.body_text);
     if (!msg.body_html.empty()) {
         pc.setBinary(PR_HTML, msg.body_html.data(), msg.body_html.size());
+    } else if (!msg.body_text.empty()) {
+        // With no HTML body there is nothing for Outlook to synthesize a rich
+        // body from, so wrap the plain text as RTF.  Only in that case: when
+        // HTML is present Outlook derives a better RTF body itself, and a
+        // competing one here would be the version it displays.
+        pc.setBinary(PR_RTF_COMPRESSED, rtfFromPlainText(msg.body_text));
+        pc.setBool(PR_RTF_IN_SYNC, true);
     }
     // Every string this writer emits has been transcoded to UTF-8 by the MIME
     // layer, so the codepage is constant.
@@ -269,10 +341,28 @@ void PstWriter::addMessage(FolderId folder_id, const Message& msg) {
     std::uint32_t flags = MSGFLAG_UNMODIFIED;
     if (msg.seen()) flags |= MSGFLAG_READ;
     if (!msg.attachments.empty()) flags |= MSGFLAG_HASATTACH;
+    // IMAP's \\Draft is MAPI's "not sent yet".
+    if (msg.flags & kFlagDraft) flags |= MSGFLAG_UNSENT;
     pc.setInt32(PR_MESSAGE_FLAGS, flags);
     pc.setInt32(PR_FLAG_STATUS,
                 (msg.flags & kFlagFlagged) ? FLAG_STATUS_FLAGGED : FLAG_STATUS_NONE);
     pc.setBool(PR_HASATTACH, !msg.attachments.empty());
+
+    // \\Answered is what puts the reply arrow on the message in Outlook's list:
+    // the icon comes from the last verb, not from any flag.
+    if (msg.flags & kFlagAnswered) {
+        pc.setInt32(PR_LAST_VERB_EXECUTED, VERB_REPLYTOSENDER);
+        pc.setTime(PR_LAST_VERB_EXECUTION_TIME,
+                   unixToFiletime(msg.date ? msg.date : msg.delivery_time));
+        pc.setInt32(PR_ICON_INDEX, ICON_MAIL_REPLIED);
+    }
+
+    // IMAP keywords become Outlook categories, which is the only place in the
+    // UI a user can see them again.
+    if (!msg.keywords.empty()) {
+        const std::uint16_t id = names_.idForString(kPsPublicStrings, "Keywords");
+        if (id != 0) pc.setStringArray(makeTag(id, kPtMvUnicode), msg.keywords);
+    }
 
     const std::uint32_t size =
         msg.size ? msg.size
@@ -280,10 +370,12 @@ void PstWriter::addMessage(FolderId folder_id, const Message& msg) {
     pc.setInt32(PR_MESSAGE_SIZE, size);
     if (!msg.message_id.empty()) pc.setString(PR_INTERNET_MESSAGE_ID, msg.message_id);
     if (!msg.in_reply_to.empty()) pc.setString(PR_IN_REPLY_TO_ID, msg.in_reply_to);
-    pc.setBinary(PR_ENTRYID, entryId(nid));
-    // Outlook requires a search key on every message; it only has to be a
-    // stable 16-byte value that is unique within the store.
-    {
+    // An embedded message is reached through its attachment, not through the
+    // store's object table, and Outlook does not give one an entry id.
+    if (!embedded) {
+        pc.setBinary(PR_ENTRYID, entryId(nid));
+        // Outlook requires a search key on every message; it only has to be a
+        // stable 16-byte value that is unique within the store.
         std::vector<std::uint8_t> key(store_guid_, store_guid_ + 16);
         for (int i = 0; i < 4; ++i) {
             key[12 + i] ^= static_cast<std::uint8_t>(nid >> (8 * i));
@@ -359,7 +451,9 @@ void PstWriter::addMessage(FolderId folder_id, const Message& msg) {
 
             SubnodeAllocator att_subs(ndb_);
             PropertyContext apc;
-            apc.setInt32(PR_ATTACH_METHOD, ATTACH_BY_VALUE);
+            const bool is_embedded = static_cast<bool>(a.embedded);
+            apc.setInt32(PR_ATTACH_METHOD,
+                         is_embedded ? ATTACH_EMBEDDED_MSG : ATTACH_BY_VALUE);
             apc.setInt32(PR_ATTACH_NUM, static_cast<std::uint32_t>(i));
             apc.setInt32(PR_ATTACH_RENDERING_POS, 0xFFFFFFFFu);
             apc.setInt32(PR_OBJECT_TYPE, MAPI_ATTACH);
@@ -382,11 +476,28 @@ void PstWriter::addMessage(FolderId folder_id, const Message& msg) {
             attach_size += 5 * 4;  // method, number, rendering position,
                                    // object type and the size value itself
             apc.setInt32(PR_ATTACH_SIZE, static_cast<std::uint32_t>(attach_size));
-            // Written straight through to its own subnode rather than copied
-            // into the property context first: an attachment is the largest
-            // thing this writer handles and does not need to exist twice.
-            apc.setSpilledValue(PR_ATTACH_DATA_BIN,
-                                att_subs.spill(a.data.data(), a.data.size()));
+            if (is_embedded) {
+                // A message/rfc822 part is stored as a message in its own
+                // right, in a subnode of the attachment, so Outlook opens it
+                // in place instead of offering it as a file to save.  Its own
+                // recipients and attachments come with it, recursively.
+                const Nid emb_nid = makeNid(kNidTypeNormalMessage, 1);
+                SubnodeAllocator emb_subs(ndb_);
+                std::uint32_t emb_flags = 0, emb_size = 0;
+                const auto emb_heap = buildMessage(*a.embedded, emb_nid, emb_subs,
+                                                   /*embedded=*/true, &emb_flags,
+                                                   &emb_size);
+                const Bid emb_data = ndb_.writeData(emb_heap);
+                const Bid emb_sub = ndb_.writeSubnodes(emb_subs.entries());
+                att_subs.add(emb_nid, emb_data, emb_sub);
+                apc.setObject(PR_ATTACH_DATA_OBJ, emb_nid, emb_size);
+            } else {
+                // Written straight through to its own subnode rather than copied
+                // into the property context first: an attachment is the largest
+                // thing this writer handles and does not need to exist twice.
+                apc.setSpilledValue(PR_ATTACH_DATA_BIN,
+                                    att_subs.spill(a.data.data(), a.data.size()));
+            }
 
             const auto aheap = apc.serialize(att_subs);
             const Bid adata = ndb_.writeData(aheap);
@@ -397,7 +508,8 @@ void PstWriter::addMessage(FolderId folder_id, const Message& msg) {
             at.setString(r, PR_DISPLAY_NAME, name);
             at.setString(r, PR_ATTACH_LONG_FILENAME, name);
             at.setString(r, PR_ATTACH_FILENAME, name);
-            at.setInt32(r, PR_ATTACH_METHOD, ATTACH_BY_VALUE);
+            at.setInt32(r, PR_ATTACH_METHOD,
+                        is_embedded ? ATTACH_EMBEDDED_MSG : ATTACH_BY_VALUE);
             at.setInt32(r, PR_ATTACH_SIZE, static_cast<std::uint32_t>(attach_size));
             at.setString(r, PR_ATTACH_MIME_TAG, a.content_type);
             at.setInt32(r, PR_ATTACH_NUM, static_cast<std::uint32_t>(i));
@@ -411,8 +523,21 @@ void PstWriter::addMessage(FolderId folder_id, const Message& msg) {
         subs.add(kNidAttachmentTable, data, sub);
     }
 
-    const auto heap = pc.serialize(subs);
+    if (out_flags) *out_flags = flags;
+    if (out_size) *out_size = size;
+    return pc.serialize(subs);
+}
+
+void PstWriter::addMessage(FolderId folder_id, const Message& msg) {
+    Folder& f = folder(folder_id);
+    const Nid nid = makeNid(kNidTypeNormalMessage, next_message_index_++);
+
+    SubnodeAllocator subs(ndb_);
+    std::uint32_t flags = 0, size = 0;
+    const auto heap = buildMessage(msg, nid, subs, /*embedded=*/false, &flags, &size);
     writeNodeFromHeap(nid, folder_id, heap, subs);
+
+    const std::int64_t delivered = msg.delivery_time ? msg.delivery_time : msg.date;
 
     // ---- row in the parent folder's contents table ------------------------
     f.contents->beginRow(nid);
@@ -420,7 +545,8 @@ void PstWriter::addMessage(FolderId folder_id, const Message& msg) {
     f.contents->setString(PR_SENDER_NAME,
                           msg.from.name.empty() ? msg.from.email : msg.from.name);
     f.contents->setString(PR_DISPLAY_TO, joinMailboxes(msg.to));
-    f.contents->setString(PR_MESSAGE_CLASS, "IPM.Note");
+    f.contents->setString(PR_MESSAGE_CLASS,
+                          msg.message_class.empty() ? "IPM.Note" : msg.message_class);
     f.contents->setTime(PR_MESSAGE_DELIVERY_TIME, unixToFiletime(delivered));
     f.contents->setInt32(PR_MESSAGE_FLAGS, flags);
     f.contents->setInt32(PR_MESSAGE_SIZE, size);

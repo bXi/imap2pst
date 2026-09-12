@@ -8,6 +8,8 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
+#include <map>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -176,6 +178,64 @@ class Reader {
         return out;
     }
 
+    // ---- LTP: enough of it to read a property back ------------------------
+    //
+    // Written from [MS-PST] alongside the NDB reader above, and sharing nothing
+    // with the writer, so a test that reads a property back is checking the
+    // file rather than agreeing with the code that produced it.
+
+    // Concatenated contents of a data tree, following XBLOCKs.
+    std::vector<std::uint8_t> blockData(Bid bid) const {
+        std::vector<std::uint8_t> out;
+        const auto all = blocks();
+        auto find = [&](Bid want) -> const BlockRef* {
+            for (const auto& b : all) {
+                if (b.bid == want) return &b;
+            }
+            return nullptr;
+        };
+        std::function<void(Bid)> append = [&](Bid want) {
+            const BlockRef* b = find(want);
+            if (!b) return;
+            const std::uint8_t* p = at(b->ib);
+            if ((want & 2) && b->cb >= 8 && p[0] == 1) {   // XBLOCK / XXBLOCK
+                const std::uint16_t count = peek16(p + 2);
+                for (std::uint16_t i = 0; i < count; ++i) append(peek64(p + 8 + 8 * i));
+                return;
+            }
+            out.insert(out.end(), p, p + b->cb);
+        };
+        append(bid);
+        return out;
+    }
+
+    // Subnode NID -> (data BID, subnode BID).
+    std::map<Nid, std::pair<Bid, Bid>> subnodes(Bid bid) const {
+        std::map<Nid, std::pair<Bid, Bid>> out;
+        if (bid == 0) return out;
+        const auto all = blocks();
+        std::function<void(Bid)> walkSub = [&](Bid want) {
+            for (const auto& b : all) {
+                if (b.bid != want) continue;
+                const std::uint8_t* p = at(b.ib);
+                if (b.cb < 8 || p[0] != 2) return;
+                const std::uint8_t level = p[1];
+                const std::uint16_t count = peek16(p + 2);
+                for (std::uint16_t i = 0; i < count; ++i) {
+                    if (level == 0) {
+                        out[static_cast<Nid>(peek64(p + 8 + 24 * i))] = {
+                            peek64(p + 16 + 24 * i), peek64(p + 24 + 24 * i)};
+                    } else {
+                        walkSub(peek64(p + 16 + 16 * i));
+                    }
+                }
+                return;
+            }
+        };
+        walkSub(bid);
+        return out;
+    }
+
     std::vector<Nid> nodes() const {
         std::vector<std::vector<std::uint8_t>> leaves;
         walk(nbtRoot(), kPTypeNBT, 0, &leaves, nullptr);
@@ -188,5 +248,77 @@ class Reader {
     std::vector<std::uint8_t> b_;
 };
 
+
+// One allocation out of a heap-on-node buffer.
+inline std::vector<std::uint8_t> heapItem(const std::vector<std::uint8_t>& buf,
+                                          std::uint32_t hid) {
+    const std::uint32_t index = (hid >> 5) & 0x7FF;
+    const std::size_t block = hid >> 16;
+    if (index == 0) return {};
+    const std::size_t base = block * kMaxBlockData;
+    if (base + 2 > buf.size()) return {};
+    const std::size_t map = base + peek16(buf.data() + base);
+    if (map + 4 > buf.size()) return {};
+    if (index > peek16(buf.data() + map)) return {};
+    const std::size_t start = base + peek16(buf.data() + map + 4 + 2 * (index - 1));
+    const std::size_t end = base + peek16(buf.data() + map + 6 + 2 * (index - 1));
+    if (end > buf.size() || start > end) return {};
+    return std::vector<std::uint8_t>(buf.begin() + start, buf.begin() + end);
+}
+
+// The value of one property in a PC, as (type, bytes).  Values held in
+// subnodes come back empty: the caller knows the subnode tree and can follow it.
+inline std::pair<std::uint16_t, std::vector<std::uint8_t>> pcProperty(
+        const std::vector<std::uint8_t>& heap, std::uint16_t prop_id) {
+    if (heap.size() < 8 || heap[3] != kHnSigPC) return {0, {}};
+    const auto header = heapItem(heap, peek32(heap.data() + 4));
+    if (header.size() < 8 || header[0] != kHnSigBTH) return {0, {}};
+    const std::uint8_t key_size = header[1], data_size = header[2], levels = header[3];
+    std::vector<std::uint8_t> records = heapItem(heap, peek32(header.data() + 4));
+    for (std::uint8_t level = 0; level < levels; ++level) {
+        // Intermediate levels: key plus the HID of the next level down.
+        std::vector<std::uint8_t> next;
+        for (std::size_t o = 0; o + key_size + 4 <= records.size(); o += key_size + 4) {
+            const std::uint16_t key = peek16(records.data() + o);
+            if (key > prop_id) break;
+            next = heapItem(heap, peek32(records.data() + o + key_size));
+        }
+        records = next;
+    }
+    const std::size_t stride = key_size + data_size;
+    for (std::size_t o = 0; o + stride <= records.size(); o += stride) {
+        if (peek16(records.data() + o) != prop_id) continue;
+        const std::uint16_t type = peek16(records.data() + o + key_size);
+        const std::uint32_t hnid = peek32(records.data() + o + key_size + 2);
+        if (type == kPtLong || type == kPtBoolean || type == kPtShort) {
+            std::vector<std::uint8_t> inline_value(4);
+            for (int i = 0; i < 4; ++i) {
+                inline_value[i] = static_cast<std::uint8_t>(hnid >> (8 * i));
+            }
+            return {type, inline_value};
+        }
+        if (hnid != 0 && (hnid & 0x1F) == 0) return {type, heapItem(heap, hnid)};
+        return {type, {}};   // absent, or spilled into a subnode
+    }
+    return {0, {}};
+}
+
+inline std::string utf16ToUtf8(const std::vector<std::uint8_t>& v) {
+    std::string out;
+    for (std::size_t i = 0; i + 1 < v.size(); i += 2) {
+        const std::uint32_t c = peek16(v.data() + i);
+        if (c < 0x80) {
+            out.push_back(static_cast<char>(c));
+        } else if (c < 0x800) {
+            out.push_back(static_cast<char>(0xC0 | (c >> 6)));
+            out.push_back(static_cast<char>(0x80 | (c & 0x3F)));
+        } else {
+            out.push_back(static_cast<char>(0xE0 | (c >> 12)));
+            out.push_back(static_cast<char>(0x80 | ((c >> 6) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | (c & 0x3F)));
+        }
+    }
+    return out;
+}
 
 }  // namespace imap2pst::pst::test

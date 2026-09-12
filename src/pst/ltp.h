@@ -61,6 +61,11 @@ class PropertyContext {
     void setBinary(PropTag tag, const std::vector<std::uint8_t>& v) {
         setBinary(tag, v.data(), v.size());
     }
+    // PT_MV_UNICODE: a count, an offset per item, then the items themselves.
+    void setStringArray(PropTag tag, const std::vector<std::string>& items);
+    // PtypObject: four bytes of subnode NID and four of size.  Used for an
+    // embedded message, whose own PC lives in that subnode.
+    void setObject(PropTag tag, Nid nid, std::uint32_t size);
     // Records a value the caller has already written to a subnode.  Large
     // payloads -- attachment bodies above all -- would otherwise be copied into
     // the property context and held there until serialize(), doubling peak

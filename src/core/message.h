@@ -8,10 +8,13 @@
 // independently testable.
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace imap2pst {
+
+struct Message;
 
 // IMAP system flags, as a bitmask.  Keyword flags that are not one of the
 // RFC 3501 system flags are kept verbatim in RawMessage::keywords.
@@ -40,6 +43,12 @@ struct Attachment {
     std::string content_id;    // without angle brackets, may be empty
     bool is_inline = false;    // Content-Disposition: inline
     std::vector<std::uint8_t> data;
+
+    // Set for a message/rfc822 part: the forwarded message, parsed.  The PST
+    // writer stores it as an embedded message rather than as a blob, which is
+    // what lets Outlook open it in place instead of offering it as a file.
+    // `data` still holds the original source either way.
+    std::shared_ptr<Message> embedded;
 };
 
 // A header that has no structured slot on Message.  Kept so nothing from the
@@ -50,6 +59,11 @@ struct RawHeader {
 };
 
 struct Message {
+    // MAPI message class.  Empty means the writer picks "IPM.Note"; the MIME
+    // layer sets it when the message is something more specific, such as a
+    // delivery report or a signed message.
+    std::string message_class;
+
     // --- structured headers -------------------------------------------------
     Mailbox from;
     std::vector<Mailbox> to;

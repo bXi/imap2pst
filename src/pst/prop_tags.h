@@ -38,6 +38,11 @@ inline constexpr PropTag PR_ATTACH_NUM             = makeTag(0x0E21, kPtLong);
 inline constexpr PropTag PR_INTERNET_ARTICLE_NUMBER= makeTag(0x0E23, kPtLong);
 inline constexpr PropTag PR_BODY                   = makeTag(0x1000, kPtUnicode);
 inline constexpr PropTag PR_HTML                   = makeTag(0x1013, kPtBinary);
+inline constexpr PropTag PR_RTF_COMPRESSED         = makeTag(0x1009, kPtBinary);
+inline constexpr PropTag PR_RTF_IN_SYNC            = makeTag(0x0E1F, kPtBoolean);
+inline constexpr PropTag PR_LAST_VERB_EXECUTED     = makeTag(0x1081, kPtLong);
+inline constexpr PropTag PR_LAST_VERB_EXECUTION_TIME = makeTag(0x1082, kPtSystime);
+inline constexpr PropTag PR_ICON_INDEX             = makeTag(0x1080, kPtLong);
 inline constexpr PropTag PR_INTERNET_MESSAGE_ID    = makeTag(0x1035, kPtUnicode);
 inline constexpr PropTag PR_IN_REPLY_TO_ID         = makeTag(0x1042, kPtUnicode);
 inline constexpr PropTag PR_FLAG_STATUS            = makeTag(0x1090, kPtLong);
@@ -78,6 +83,9 @@ inline constexpr PropTag PR_PST_PASSWORD           = makeTag(0x67FF, kPtLong);
 
 // ------------------------------------------------------------- attachments
 inline constexpr PropTag PR_ATTACH_DATA_BIN        = makeTag(0x3701, kPtBinary);
+// The same property id as PR_ATTACH_DATA_BIN, typed as an object: that is how
+// an embedded message is distinguished from a blob attachment.
+inline constexpr PropTag PR_ATTACH_DATA_OBJ        = makeTag(0x3701, kPtObject);
 inline constexpr PropTag PR_ATTACH_ENCODING        = makeTag(0x3702, kPtBinary);
 inline constexpr PropTag PR_ATTACH_EXTENSION       = makeTag(0x3703, kPtUnicode);
 inline constexpr PropTag PR_ATTACH_FILENAME        = makeTag(0x3704, kPtUnicode);
@@ -153,7 +161,12 @@ inline constexpr std::uint32_t FLAG_STATUS_COMPLETE  = 1;
 inline constexpr std::uint32_t FLAG_STATUS_FLAGGED   = 2;
 
 // PR_ATTACH_METHOD.
+// PidTagLastVerbExecuted: the reply arrow Outlook shows on an answered message.
+inline constexpr std::uint32_t VERB_REPLYTOSENDER = 102;
+inline constexpr std::uint32_t ICON_MAIL_REPLIED  = 0x105;
+
 inline constexpr std::uint32_t ATTACH_BY_VALUE = 1;
+inline constexpr std::uint32_t ATTACH_EMBEDDED_MSG = 5;
 
 // PR_RECIPIENT_TYPE.
 inline constexpr std::uint32_t MAPI_TO  = 1;

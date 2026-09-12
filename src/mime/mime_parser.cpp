@@ -5,9 +5,14 @@
 #include <sstream>
 
 #include <vmime/vmime.hpp>
+#include <vmime/contentTypeField.hpp>
 
 namespace imap2pst::mime {
 namespace {
+
+// A forwarded message that itself forwards a message is ordinary; a chain
+// deeper than this is not worth the stack or the file size.
+constexpr int kMaxEmbeddedDepth = 8;
 
 const vmime::charset& utf8() {
     static const vmime::charset cs("utf-8");
@@ -210,6 +215,61 @@ void collectTextParts(const vmime::messageParser& mp, Message* out) {
     }
 }
 
+// Maps the top-level Content-Type onto a MAPI message class.  Outlook keys a
+// good deal of its behaviour off this: a delivery report shown as an ordinary
+// note loses its report rendering, and a signed message shown as a note offers
+// the signature as a file attachment instead of validating it.
+std::string lower(std::string v) {
+    std::transform(v.begin(), v.end(), v.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return v;
+}
+
+std::string messageClassFor(const vmime::header& hdr) {
+    if (!hdr.hasField(vmime::fields::CONTENT_TYPE)) return {};
+    const auto field = hdr.findField(vmime::fields::CONTENT_TYPE);
+    const auto value = vmime::dynamicCast<const vmime::contentTypeField>(field);
+    if (!value) return {};
+    const auto type = lower(value->getValue()->generate());
+
+    auto parameter = [&](const std::string& name) {
+        const auto p = value->findParameter(name);
+        return p ? lower(p->getValue().generate()) : std::string{};
+    };
+
+    if (type.compare(0, 16, "multipart/report") == 0) {
+        const std::string report = parameter("report-type");
+        if (report == "delivery-status") return "REPORT.IPM.Note.NDR";
+        if (report == "disposition-notification") return "REPORT.IPM.Note.IPNRN";
+        return {};
+    }
+    if (type.compare(0, 16, "multipart/signed") == 0) return "IPM.Note.SMIME.MultipartSigned";
+    if (type.compare(0, 23, "application/pkcs7-mime") == 0 ||
+        type.compare(0, 26, "application/x-pkcs7-mime") == 0) {
+        return "IPM.Note.SMIME";
+    }
+    return {};
+}
+
+Message parseAtDepth(const std::string& raw, int depth);
+
+// Turns every message/rfc822 attachment into a parsed Message hanging off the
+// attachment.  `depth` stops a message that forwards itself -- or a deliberately
+// nested one -- from recursing without bound; past the limit the part stays an
+// ordinary attachment, which is lossless, just less convenient to read.
+void parseEmbeddedMessages(Message* out, int depth) {
+    if (depth >= kMaxEmbeddedDepth) return;
+    for (auto& a : out->attachments) {
+        if (lower(a.content_type) != "message/rfc822" || a.data.empty()) continue;
+        auto inner = std::make_shared<Message>(parseAtDepth(
+            std::string(a.data.begin(), a.data.end()), depth + 1));
+        if (a.filename.empty()) {
+            a.filename = inner->subject.empty() ? "Forwarded message" : inner->subject;
+        }
+        a.embedded = std::move(inner);
+    }
+}
+
 void collectAttachments(const vmime::messageParser& mp, Message* out) {
     for (std::size_t i = 0; i < mp.getAttachmentCount(); ++i) {
         const auto att = mp.getAttachmentAt(i);
@@ -288,9 +348,7 @@ Message fallbackParse(const std::string& raw) {
     return out;
 }
 
-}  // namespace
-
-Message parse(const std::string& raw) {
+Message parseAtDepth(const std::string& raw, int depth) {
     Message out;
     try {
         auto msg = vmime::make_shared<vmime::message>();
@@ -324,8 +382,13 @@ Message parse(const std::string& raw) {
             }
         }
 
+        if (const auto hdr = msg->getHeader()) {
+            out.message_class = messageClassFor(*hdr);
+        }
+
         collectTextParts(mp, &out);
         collectAttachments(mp, &out);
+        parseEmbeddedMessages(&out, depth);
     } catch (const vmime::exception& e) {
         out = fallbackParse(raw);
         out.headers.push_back({"X-Imap2Pst-Parse-Error", e.what()});
@@ -333,6 +396,10 @@ Message parse(const std::string& raw) {
     out.size = static_cast<std::uint32_t>(raw.size());
     return out;
 }
+
+}  // namespace
+
+Message parse(const std::string& raw) { return parseAtDepth(raw, 0); }
 
 Message parse(const RawMessage& raw) {
     Message out = parse(raw.rfc822);

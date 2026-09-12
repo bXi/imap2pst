@@ -9,6 +9,7 @@
 
 #include <cstdio>
 #include <fstream>
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
@@ -521,6 +522,115 @@ TEST(PstNameIdMap, CaseVariantNamesShareOneId) {
     // The same spelling under a different GUID is a different property.
     EXPECT_NE(first, names.idForString(kPsPublicStrings, "Content-Type"));
     EXPECT_EQ(names.size(), 3u);
+}
+
+TEST(PstMessages, EmbeddedMessageIsStoredAsAMessageNotABlob) {
+    // A forwarded message must be reachable as a message -- its own subject,
+    // its own recipients, its own attachment -- rather than as a file the
+    // reader hands back as bytes.  libpff cannot open an embedded message
+    // through its Python binding, so this checks the file directly.
+    TempPst tmp;
+    {
+        PstWriter w(tmp.path());
+        const auto inbox = w.createFolder(w.ipmSubtree(), "Inbox");
+
+        Message inner;
+        inner.subject = "The original report";
+        inner.from = {"Carol", "carol@example.org"};
+        inner.to = {{"Alice", "alice@example.com"}};
+        inner.body_text = "Numbers attached.";
+
+        Message outer = makeMessage(1, false);
+        outer.subject = "Fwd: report";
+        Attachment fwd;
+        fwd.filename = "original.eml";
+        fwd.content_type = "message/rfc822";
+        fwd.data.assign(16, 'x');
+        fwd.embedded = std::make_shared<Message>(inner);
+        outer.attachments.push_back(std::move(fwd));
+
+        w.addMessage(inbox, outer);
+        w.finish();
+    }
+
+    const Reader r(readAll(tmp.path()));
+    std::size_t checked = 0;
+    for (const auto& e : r.nodeEntries()) {
+        if (nidType(e.nid) != kNidTypeNormalMessage) continue;
+        const auto message_subs = r.subnodes(e.sub);
+
+        for (const auto& [sub_nid, bids] : message_subs) {
+            if (nidType(sub_nid) != kNidTypeAttachment) continue;
+            const auto attachment = r.blockData(bids.first);
+
+            const auto method = test::pcProperty(attachment, tagId(PR_ATTACH_METHOD));
+            ASSERT_EQ(method.second.size(), 4u);
+            EXPECT_EQ(peek32(method.second.data()), ATTACH_EMBEDDED_MSG);
+
+            // The data object names the subnode the message lives in, and is
+            // typed as an object: that pair is what marks it as embedded.
+            const auto object = test::pcProperty(attachment, tagId(PR_ATTACH_DATA_OBJ));
+            EXPECT_EQ(object.first, kPtObject);
+            ASSERT_GE(object.second.size(), 8u);
+            const Nid embedded_nid = peek32(object.second.data());
+
+            const auto attachment_subs = r.subnodes(bids.second);
+            ASSERT_TRUE(attachment_subs.count(embedded_nid))
+                << "the object property points at a subnode that does not exist";
+
+            const auto embedded = r.blockData(attachment_subs.at(embedded_nid).first);
+            const auto subject = test::pcProperty(embedded, tagId(PR_SUBJECT));
+            EXPECT_EQ(test::utf16ToUtf8(subject.second), "The original report");
+
+            // Its recipients came with it, in its own subnode tree.
+            const auto inner_subs = r.subnodes(attachment_subs.at(embedded_nid).second);
+            EXPECT_TRUE(inner_subs.count(kNidRecipientTable))
+                << "an embedded message keeps its own recipient table";
+            ++checked;
+        }
+    }
+    EXPECT_EQ(checked, 1u) << "exactly one embedded attachment was written";
+}
+
+TEST(PstMessages, PlainTextMessageCarriesAnRtfBody) {
+    TempPst tmp;
+    {
+        PstWriter w(tmp.path());
+        const auto inbox = w.createFolder(w.ipmSubtree(), "Inbox");
+        Message m = makeMessage(1, false);
+        m.body_text = "Line one\nLine two\n";
+        m.body_html.clear();
+        w.addMessage(inbox, m);
+
+        // A message that already has HTML gets no RTF: Outlook derives a better
+        // one from the HTML, and a competing body here would win over it.
+        Message html = makeMessage(2, false);
+        html.body_html = "<html><body>rich</body></html>";
+        w.addMessage(inbox, html);
+        w.finish();
+    }
+
+    const Reader r(readAll(tmp.path()));
+    std::size_t with_rtf = 0, without = 0;
+    for (const auto& e : r.nodeEntries()) {
+        if (nidType(e.nid) != kNidTypeNormalMessage) continue;
+        const auto heap = r.blockData(e.data);
+        const auto rtf = test::pcProperty(heap, tagId(PR_RTF_COMPRESSED));
+        if (rtf.second.empty()) {
+            ++without;
+            continue;
+        }
+        ++with_rtf;
+        ASSERT_GE(rtf.second.size(), 16u);
+        EXPECT_EQ(peek32(rtf.second.data() + 8), 0x75465A4Cu) << "dwMagic must be \"LZFu\"";
+        const std::size_t packed = rtf.second.size() - 16;
+        EXPECT_EQ(peek32(rtf.second.data()), packed + 12) << "cbSize covers the packed bytes plus 12";
+        EXPECT_EQ(peek32(rtf.second.data() + 12),
+                  computeCrc(rtf.second.data() + 16, packed))
+            << "a reader rejects the body outright when the CRC disagrees";
+    }
+    EXPECT_EQ(with_rtf, 1u);
+    EXPECT_EQ(without, 1u);
 }
 
 TEST(PstNodes, ReservedNodesArePresent) {

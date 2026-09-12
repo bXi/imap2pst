@@ -110,6 +110,32 @@ void PropertyContext::setBinary(PropTag tag, const void* data, std::size_t len) 
     put(tag, Value{tag, Value::Kind::kBytes, 0, std::vector<std::uint8_t>(p, p + len)});
 }
 
+void PropertyContext::setStringArray(PropTag tag, const std::vector<std::string>& items) {
+    // [MS-PST] 2.3.3.4.2: dwCount, then one offset per item measured from the
+    // start of the buffer, then the items.  The last item runs to the end, so
+    // no length is stored for any of them.
+    std::vector<std::vector<std::uint8_t>> encoded;
+    encoded.reserve(items.size());
+    for (const auto& s : items) encoded.push_back(utf8ToUtf16le(s));
+
+    std::vector<std::uint8_t> buf;
+    put32(buf, static_cast<std::uint32_t>(encoded.size()));
+    std::uint32_t offset = static_cast<std::uint32_t>(4 + 4 * encoded.size());
+    for (const auto& e : encoded) {
+        put32(buf, offset);
+        offset += static_cast<std::uint32_t>(e.size());
+    }
+    for (const auto& e : encoded) buf.insert(buf.end(), e.begin(), e.end());
+    put(tag, Value{tag, Value::Kind::kBytes, 0, std::move(buf)});
+}
+
+void PropertyContext::setObject(PropTag tag, Nid nid, std::uint32_t size) {
+    std::vector<std::uint8_t> buf;
+    put32(buf, nid);
+    put32(buf, size);
+    put(tag, Value{tag, Value::Kind::kBytes, 0, std::move(buf)});
+}
+
 bool PropertyContext::has(PropTag tag) const {
     return std::any_of(values_.begin(), values_.end(),
                        [&](const Value& v) { return tagId(v.tag) == tagId(tag); });

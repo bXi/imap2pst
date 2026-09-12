@@ -8,6 +8,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <memory>
 #include <vector>
 
 #include "pst/pst_writer.h"
@@ -141,6 +142,41 @@ int main(int argc, char** argv) {
         writer.addMessage(unicode_folder, m);
         expected.push_back({"\xC3\x9C\x62\x65rsicht", m});
     }
+    {
+        // Everything the fidelity work added, in one message: a class other
+        // than IPM.Note, IMAP keywords that become categories, the answered
+        // flag, and a forwarded message carrying its own recipients and its own
+        // attachment.
+        Message m = make("Fwd: report", "Passing this on.", {}, 1700000500);
+        m.message_class = "IPM.Note.SMIME.MultipartSigned";
+        m.keywords = {"Work", "Urgent"};
+        m.flags = kFlagSeen | kFlagAnswered;
+
+        Message inner;
+        inner.subject = "The original report";
+        inner.from = {"Carol", "carol@example.org"};
+        inner.to = {{"Alice Example", "alice@example.com"}};
+        inner.body_text = "Numbers attached.";
+        inner.delivery_time = 1700000450;
+        inner.date = inner.delivery_time;
+        Attachment csv;
+        csv.filename = "numbers.csv";
+        csv.content_type = "text/csv";
+        const std::string csv_data = "quarter,revenue\nQ3,120\n";
+        csv.data.assign(csv_data.begin(), csv_data.end());
+        inner.attachments.push_back(csv);
+
+        Attachment fwd;
+        fwd.filename = "original.eml";
+        fwd.content_type = "message/rfc822";
+        const std::string src = "From: carol@example.org\r\nSubject: The original report\r\n";
+        fwd.data.assign(src.begin(), src.end());
+        fwd.embedded = std::make_shared<Message>(inner);
+        m.attachments.push_back(fwd);
+
+        writer.addMessage(inbox, m);
+        expected.push_back({"Inbox", m});
+    }
     // A folder big enough to force the streaming contents table across many
     // heap blocks and several row-matrix blocks, so the round-trip covers the
     // path that a real mailbox takes.
@@ -168,12 +204,32 @@ int main(int argc, char** argv) {
            << "      \"body_text\": \"" << jsonEscape(m.body_text) << "\",\n"
            << "      \"body_html\": \"" << jsonEscape(m.body_html) << "\",\n"
            << "      \"delivery_time\": " << m.delivery_time << ",\n"
+           << "      \"message_class\": \""
+           << jsonEscape(m.message_class.empty() ? "IPM.Note" : m.message_class)
+           << "\",\n"
+           << "      \"categories\": [";
+        for (std::size_t k = 0; k < m.keywords.size(); ++k) {
+            js << (k ? ", " : "") << "\"" << jsonEscape(m.keywords[k]) << "\"";
+        }
+        js << "],\n"
+           << "      \"wants_rtf\": " << (m.body_html.empty() && !m.body_text.empty() ? "true" : "false")
+           << ",\n"
+
            << "      \"attachments\": [";
         for (std::size_t k = 0; k < m.attachments.size(); ++k) {
             const auto& a = m.attachments[k];
-            js << (k ? ", " : "") << "{\"filename\": \"" << jsonEscape(a.filename)
-               << "\", \"size\": " << a.data.size() << ", \"data_hex\": \""
-               << hexOf(a.data) << "\"}";
+            js << (k ? ", " : "") << "{\"filename\": \"" << jsonEscape(a.filename) << "\"";
+            if (a.embedded) {
+                // An embedded message has no attachment payload of its own; it
+                // is checked by opening it and looking at the message inside.
+                js << ", \"embedded_subject\": \"" << jsonEscape(a.embedded->subject)
+                   << "\", \"embedded_attachments\": " << a.embedded->attachments.size()
+                   << ", \"embedded_body\": \"" << jsonEscape(a.embedded->body_text) << "\"";
+            } else {
+                js << ", \"size\": " << a.data.size() << ", \"data_hex\": \""
+                   << hexOf(a.data) << "\"";
+            }
+            js << "}";
         }
         js << "]\n    }" << (i + 1 == expected.size() ? "\n" : ",\n");
     }

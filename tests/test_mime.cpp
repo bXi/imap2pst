@@ -178,5 +178,60 @@ TEST(MimeRobustness, GarbageInputDoesNotThrow) {
     EXPECT_GT(m.size, 0u);
 }
 
+TEST(Mime, ForwardedMessageIsParsedAsAnEmbeddedMessage) {
+    const Message m = parse(test::readFixture("forwarded.eml"));
+    EXPECT_EQ(m.subject, "Fwd: quarterly numbers");
+    ASSERT_EQ(m.attachments.size(), 1u);
+
+    const Attachment& a = m.attachments[0];
+    EXPECT_EQ(a.content_type, "message/rfc822");
+    ASSERT_TRUE(a.embedded) << "a message/rfc822 part must be parsed, not kept as a blob";
+    // The original source is still there, so nothing is lost by embedding.
+    EXPECT_FALSE(a.data.empty());
+
+    const Message& inner = *a.embedded;
+    EXPECT_EQ(inner.subject, "quarterly numbers");
+    EXPECT_EQ(inner.from.email, "carol@example.org");
+    ASSERT_EQ(inner.to.size(), 1u);
+    EXPECT_EQ(inner.to[0].email, "alice@example.com");
+    ASSERT_EQ(inner.cc.size(), 1u);
+    EXPECT_EQ(inner.cc[0].email, "dave@example.org");
+    EXPECT_NE(inner.body_text.find("Numbers attached."), std::string::npos);
+
+    // The forwarded message keeps its own attachment.
+    ASSERT_EQ(inner.attachments.size(), 1u);
+    EXPECT_EQ(inner.attachments[0].filename, "numbers.csv");
+}
+
+TEST(Mime, MessageClassFollowsTheContentType) {
+    // An ordinary message says nothing, and the writer defaults it.
+    EXPECT_TRUE(parse(test::readFixture("plain.eml")).message_class.empty());
+
+    const std::string ndr =
+        "From: postmaster@example.com\r\n"
+        "To: alice@example.com\r\n"
+        "Subject: Undeliverable\r\n"
+        "MIME-Version: 1.0\r\n"
+        "Content-Type: multipart/report; report-type=delivery-status; boundary=b\r\n"
+        "\r\n"
+        "--b\r\nContent-Type: text/plain\r\n\r\nfailed\r\n"
+        "--b\r\nContent-Type: message/delivery-status\r\n\r\nStatus: 5.1.1\r\n"
+        "--b--\r\n";
+    EXPECT_EQ(parse(ndr).message_class, "REPORT.IPM.Note.NDR");
+
+    const std::string signed_mail =
+        "From: alice@example.com\r\n"
+        "To: bob@example.net\r\n"
+        "Subject: signed\r\n"
+        "MIME-Version: 1.0\r\n"
+        "Content-Type: multipart/signed; protocol=\"application/pkcs7-signature\"; "
+        "micalg=sha-256; boundary=s\r\n"
+        "\r\n"
+        "--s\r\nContent-Type: text/plain\r\n\r\nhello\r\n"
+        "--s\r\nContent-Type: application/pkcs7-signature\r\n\r\nsig\r\n"
+        "--s--\r\n";
+    EXPECT_EQ(parse(signed_mail).message_class, "IPM.Note.SMIME.MultipartSigned");
+}
+
 }  // namespace
 }  // namespace imap2pst::mime
