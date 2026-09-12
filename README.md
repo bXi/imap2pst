@@ -1,5 +1,7 @@
 # imap2pst
 
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-buy%20me%20a%20coffee-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/bixxy)
+
 **Migrate an IMAP mailbox into an Outlook PST file, from Linux, with no Outlook
 and no Windows involved.**
 
@@ -57,8 +59,8 @@ sudo apt install ./imap2pst_0.1.0_amd64~ubuntu24.04.deb
 ### Build from source
 
 Needs a C++17 compiler, CMake 3.20+, and OpenSSL, zlib and ICU development
-headers. libcurl and vmime are fetched and built automatically unless the
-system already has them.
+headers. libcurl is fetched and built automatically unless the system already
+has it.
 
 ```sh
 sudo apt install build-essential cmake ninja-build libssl-dev zlib1g-dev libicu-dev
@@ -67,15 +69,15 @@ cmake --build build --parallel
 build/src/imap2pst --help
 ```
 
-The first build compiles libcurl and vmime from source and takes a few minutes;
-later builds do not.
+The first build compiles libcurl from source if the system has no development
+package, which takes a couple of minutes; later builds do not.
 
 | Option | Default | Effect |
 |---|---|---|
 | `IMAP2PST_BUILD_TESTS` | `ON` | Build the test suite |
-| `IMAP2PST_USE_SYSTEM_DEPS` | `OFF` | Link the system libcurl and vmime instead of building them |
+| `IMAP2PST_USE_SYSTEM_DEPS` | `OFF` | Require the system libcurl rather than building one |
 | `IMAP2PST_WITH_IMAP` | `ON` | Build the libcurl IMAP transport |
-| `IMAP2PST_WITH_MIME` | `ON` | Build the vmime MIME parser |
+| `IMAP2PST_WITH_MIME` | `ON` | Build the MIME parser |
 
 `cpack` in the build directory produces the packages.
 
@@ -145,24 +147,26 @@ million-message mailbox needs roughly 260 MB.
 ## How it works
 
 ```
-IMAP server ──libcurl──▶ raw RFC 822 ──vmime──▶ Message ──▶ Unicode PST
-             LIST                      MIME              NDB / LTP
-             UID FETCH                 charsets          folders, messages,
-             FLAGS, INTERNALDATE       attachments       attachments
+IMAP server ──libcurl──▶ raw RFC 822 ──our MIME──▶ Message ──▶ Unicode PST
+             LIST                      parser              NDB / LTP
+             UID FETCH                 charsets            folders, messages,
+             FLAGS, INTERNALDATE       attachments         attachments
 ```
 
 * **`src/imap/`** — folder listing and message fetching over `imap://` and
   `imaps://`. Parsing is split from transport so tests drive it with recorded
   responses instead of a live mailbox.
-* **`src/mime/`** — vmime turns raw RFC 822 into a normalized `Message`: headers,
-  bodies, attachments, everything transcoded to UTF-8.
+* **`src/mime/`** — turns raw RFC 822 into a normalized `Message`: headers,
+  addresses, the multipart tree, transfer encodings and charsets, everything
+  transcoded to UTF-8. This is the project's own code rather than a library, so
+  that no dependency dictates the licence.
 * **`src/pst/`** — the PST writer, layered as the specification is: blocks and
   B-trees, heap-on-node, property and table contexts, named properties, and the
   mapping from `Message` to MAPI properties on top.
 * **`src/pipeline/`** — glue, plus `src/main.cpp` for the CLI.
 
-The PST module depends on neither libcurl nor vmime, so it can be tested and
-extended on its own. More in **[docs/internals.md](docs/internals.md)**.
+The PST module depends on neither libcurl nor the MIME layer, so it can be
+tested and extended on its own. More in **[docs/internals.md](docs/internals.md)**.
 
 ---
 
@@ -199,6 +203,18 @@ MIME parsing is this project's own code rather than a library, which is what
 keeps that list free of copyleft. See
 [docs/internals.md](docs/internals.md#mime-parsing) for how it is built and
 tested.
+
+## Support
+
+imap2pst is free, and migrations it was written for tend to be the kind nobody
+enjoys doing. If it saved you an afternoon — or a licence fee for a commercial
+migration tool — you can
+[**buy me a coffee on Ko-fi**](https://ko-fi.com/bixxy). Entirely optional, and
+it changes nothing about the tool: no features are held back, and bug reports
+are answered the same either way.
+
+Reporting a bug with the message that triggered it is worth more than a coffee,
+and costs you nothing.
 
 ## Licence
 

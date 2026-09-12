@@ -15,7 +15,7 @@ endif()
 
 option(IMAP2PST_BUILD_TESTS "Build the unit and round-trip test suite" ON)
 option(IMAP2PST_USE_SYSTEM_DEPS
-       "Link the system libcurl and vmime instead of building them" OFF)
+       "Require the system libcurl rather than building one" OFF)
 option(IMAP2PST_WITH_IMAP   "Build the libcurl-backed IMAP transport" ON)
 option(IMAP2PST_WITH_MIME   "Build the vmime-backed MIME parser" ON)
 

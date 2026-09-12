@@ -11,7 +11,11 @@ cmake/Dependencies.cmake   pinned FetchContent declarations
 src/core/                  the normalized Message every module speaks
 src/imap/                  imap_parse.*  response parsers (no I/O)
                            imap_client.* libcurl transport + folder walking
-src/mime/                  vmime-backed normalization
+src/mime/                  charset.*     bytes -> UTF-8, with recovery
+                           encodings.*   base64, quoted-printable
+                           headers.*     fields, RFC 2047, addresses
+                           entity.*      the multipart tree
+                           message_builder.* tree -> Message
 src/pst/                   pst_format.h  on-disk constants and helpers
                            crc.*         the [MS-PST] weak CRC-32
                            ndb.*         blocks, allocation maps, NBT/BBT
