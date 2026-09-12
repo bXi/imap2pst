@@ -235,10 +235,14 @@ likely you are to hit them:
 * **RTF only for plain-text messages.** A message with no HTML body gets an
   `PidTagRtfCompressed` body generated from its text. One with HTML does not:
   Outlook derives a better RTF body from the HTML, and a competing one written
-  here would be the version it displays. The container is the compressed one
-  carrying literal-only tokens -- no compressor, and readable by every
-  decompressor, where the uncompressed container is not: libpff runs its LZ
-  decoder whichever signature it finds.
+  here would be the version it displays. The stream is written **uncompressed**,
+  which is the only form Outlook renders: every compressed variant tried --
+  the format's own weak CRC, a standard CRC-32, a trailing end-of-stream token,
+  a different codepage -- produced `<<Error: data corruption>>` in place of the
+  body. libpff is the opposite, and cannot read the uncompressed form at all,
+  because it runs its LZ decoder whichever signature it finds. There is no form
+  both accept, so Outlook wins: a body a person cannot read is the failure that
+  matters, and libpff still has `PidTagBody`.
 * **Message class follows the content type.** Delivery reports and signed mail
   are classed as such; anything else is `IPM.Note`. Calendar items, contacts and
   tasks arriving over IMAP are still stored as ordinary mail.

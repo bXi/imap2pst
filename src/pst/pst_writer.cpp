@@ -43,14 +43,19 @@ bool isStructuredHeader(const std::string& name) {
 
 // Wraps plain text as an RTF document inside the PidTagRtfCompressed envelope.
 //
-// The envelope ([MS-OXRTFCP]) can name itself compressed or uncompressed, but
-// the uncompressed form is not worth using: libpff runs its LZ decoder over the
-// payload whichever signature it finds, so a store using it would have an RTF
-// body no reader could open.  What is written instead is the compressed
-// container carrying nothing but literal tokens -- a flag byte of zeroes
-// followed by up to eight raw bytes, repeated.  Every decompressor handles
-// that, and there is no compressor here whose bugs could quietly corrupt a
-// body.
+// The envelope ([MS-OXRTFCP]) can name itself compressed or uncompressed, and
+// the two readers this project is checked against disagree about which to
+// accept.  Outlook renders "<<Error: data corruption>>" in place of the body for
+// every compressed stream written here -- with the format's own weak CRC, with
+// a standard CRC-32, with a trailing end-of-stream token, with the codepage
+// changed -- and renders the uncompressed one correctly.  libpff is the other
+// way round: it runs its LZ decoder whichever signature it finds, so it cannot
+// read the uncompressed form at all.
+//
+// Outlook wins, because a body a person cannot read is the failure that
+// matters; libpff losing PidTagRtfCompressed costs it nothing it cannot get
+// from PidTagBody.  The CRC is zero, which is what the uncompressed form calls
+// for and what Outlook was verified against.
 std::vector<std::uint8_t> rtfFromPlainText(const std::string& text) {
     std::string rtf =
         "{\\rtf1\\ansi\\ansicpg65001\\fromtext\\deff0"
@@ -70,23 +75,12 @@ std::vector<std::uint8_t> rtfFromPlainText(const std::string& text) {
     }
     rtf += "}";
 
-    // Literal-only LZFu: one flag byte per eight bytes, every bit clear.
-    std::vector<std::uint8_t> packed;
-    packed.reserve(rtf.size() + rtf.size() / 8 + 1);
-    for (std::size_t i = 0; i < rtf.size(); i += 8) {
-        packed.push_back(0);
-        const std::size_t n = std::min<std::size_t>(8, rtf.size() - i);
-        packed.insert(packed.end(), rtf.begin() + i, rtf.begin() + i + n);
-    }
-
     std::vector<std::uint8_t> out;
-    put32(out, static_cast<std::uint32_t>(packed.size() + 12));  // cbSize
-    put32(out, static_cast<std::uint32_t>(rtf.size()));          // cbRawSize
-    put32(out, 0x75465A4Cu);                                     // "LZFu"
-    // Over the packed bytes, with the same weak CRC the rest of the format
-    // uses.  A reader checks this: libpff refuses the body when it disagrees.
-    put32(out, computeCrc(packed.data(), packed.size()));
-    out.insert(out.end(), packed.begin(), packed.end());
+    put32(out, static_cast<std::uint32_t>(rtf.size() + 12));  // cbSize
+    put32(out, static_cast<std::uint32_t>(rtf.size()));       // cbRawSize
+    put32(out, 0x414C454Du);                                  // "MELA"
+    put32(out, 0);                                            // dwCRC
+    out.insert(out.end(), rtf.begin(), rtf.end());
     return out;
 }
 

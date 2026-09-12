@@ -28,6 +28,8 @@ except ImportError:
 
 IPM_SUBTREE = "Top of Personal Folders"
 PR_MESSAGE_CLASS = 0x001A
+PR_RTF_COMPRESSED = 0x1009
+RTF_UNCOMPRESSED_MAGIC = 0x414C454D
 PR_ATTACH_DATA = 0x3701
 PR_ATTACH_METHOD = 0x3705
 PT_OBJECT = 0x000D
@@ -137,9 +139,19 @@ def verify_message(folder, spec):
     verify_message_class(message, subject, spec.get("message_class"))
     verify_categories(message, subject, spec.get("categories") or [])
     if spec.get("wants_rtf"):
-        rtf = message.rtf_body or b""
-        check(b"\\rtf1" in rtf,
-              "message %r should carry an RTF body, got %d byte(s)" % (subject, len(rtf)))
+        # Read as a raw property rather than through message.rtf_body: the
+        # stream is stored uncompressed, which libpff cannot decode -- it runs
+        # its LZ decoder whichever signature it finds.  Outlook accepts only the
+        # uncompressed form, so that is what gets written; see rtfFromPlainText.
+        value = entries_of(message).get(PR_RTF_COMPRESSED)
+        check(value is not None, "message %r should carry an RTF body" % subject)
+        data = value[1]
+        check(len(data) >= 16, "RTF stream of %r is truncated" % subject)
+        magic = struct.unpack("<I", data[8:12])[0]
+        check(magic == RTF_UNCOMPRESSED_MAGIC,
+              "RTF stream of %r: magic 0x%08X" % (subject, magic))
+        check(data[16:].startswith(b"{\\rtf1"),
+              "RTF stream of %r does not start an RTF document" % subject)
 
     return message
 

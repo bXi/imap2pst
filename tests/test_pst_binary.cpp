@@ -622,12 +622,17 @@ TEST(PstMessages, PlainTextMessageCarriesAnRtfBody) {
         }
         ++with_rtf;
         ASSERT_GE(rtf.second.size(), 16u);
-        EXPECT_EQ(peek32(rtf.second.data() + 8), 0x75465A4Cu) << "dwMagic must be \"LZFu\"";
-        const std::size_t packed = rtf.second.size() - 16;
-        EXPECT_EQ(peek32(rtf.second.data()), packed + 12) << "cbSize covers the packed bytes plus 12";
-        EXPECT_EQ(peek32(rtf.second.data() + 12),
-                  computeCrc(rtf.second.data() + 16, packed))
-            << "a reader rejects the body outright when the CRC disagrees";
+        // Uncompressed: Outlook shows "<<Error: data corruption>>" for every
+        // compressed stream this writer produced, whatever the CRC or codepage,
+        // and renders this one.  See the note on rtfFromPlainText.
+        EXPECT_EQ(peek32(rtf.second.data() + 8), 0x414C454Du) << "dwMagic must be \"MELA\"";
+        const std::size_t raw = rtf.second.size() - 16;
+        EXPECT_EQ(peek32(rtf.second.data()), raw + 12) << "cbSize covers the body plus 12";
+        EXPECT_EQ(peek32(rtf.second.data() + 4), raw) << "cbRawSize is the body length";
+        EXPECT_EQ(peek32(rtf.second.data() + 12), 0u) << "an uncompressed stream carries no CRC";
+        const std::string body(rtf.second.begin() + 16, rtf.second.end());
+        EXPECT_EQ(body.compare(0, 6, "{\\rtf1"), 0);
+        EXPECT_NE(body.find("Line one"), std::string::npos) << "the text must survive into the RTF";
     }
     EXPECT_EQ(with_rtf, 1u);
     EXPECT_EQ(without, 1u);
