@@ -13,6 +13,20 @@ const Guid kPsInternetHeaders{0x00020386, 0, 0, {0xC0, 0x00, 0, 0, 0, 0, 0, 0x46
 namespace {
 // [MS-PST] 2.4.7.1: the bucket count is a fixed prime in practice.
 constexpr std::uint32_t kBucketCount = 251;
+
+// MAPI resolves a string-named property without regard to case, so "Content-Type"
+// and "Content-type" are one property and must get one id.  Minting two leaves
+// Outlook with two map entries for a single name: it reports the store as
+// damaged on open, and the Inbox Repair Tool dereferences the entry it could
+// not resolve and crashes.  Mail in the wild does vary the spelling of header
+// names, so fold case for lookup while keeping the spelling first seen.
+std::string foldCase(const std::string& s) {
+    std::string out = s;
+    for (char& c : out) {
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    }
+    return out;
+}
 }  // namespace
 
 std::vector<std::uint8_t> Guid::bytes() const {
@@ -42,7 +56,7 @@ std::uint16_t NameIdMap::guidIndex(const Guid& guid) {
 
 std::uint16_t NameIdMap::idForString(const Guid& guid, const std::string& name) {
     const std::uint16_t wguid = guidIndex(guid);
-    const auto key = std::make_pair(wguid, name);
+    const auto key = std::make_pair(wguid, foldCase(name));
     auto it = by_string_.find(key);
     if (it != by_string_.end()) return it->second;
     if (entries_.size() >= kMaxNames) return 0;

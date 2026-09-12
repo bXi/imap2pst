@@ -15,6 +15,7 @@
 
 #include "pst/crc.h"
 #include "pst/pst_format.h"
+#include "pst/nameid_map.h"
 #include "pst/pst_writer.h"
 #include "pst_reader.h"
 
@@ -496,6 +497,30 @@ TEST(PstNodes, HmpIndexesUseTheIndirectionLayout) {
         ++checked;
     }
     EXPECT_EQ(checked, 2u) << "both internal indexes should be present";
+}
+
+TEST(PstNameIdMap, CaseVariantNamesShareOneId) {
+    // MAPI matches string-named properties without regard to case, so two
+    // spellings of one header name are one property.  Minting an id for each
+    // leaves Outlook with two map entries for the same name: it reports the
+    // store as damaged, and the Inbox Repair Tool crashes dereferencing the
+    // entry it could not resolve.  Real mail varies header spelling freely --
+    // one "Content-type" among 147 messages was enough to trigger it.
+    NameIdMap names;
+    const std::uint16_t first = names.idForString(kPsInternetHeaders, "Content-Type");
+    const std::uint16_t second = names.idForString(kPsInternetHeaders, "Content-type");
+    const std::uint16_t third = names.idForString(kPsInternetHeaders, "CONTENT-TYPE");
+    EXPECT_EQ(first, second);
+    EXPECT_EQ(first, third);
+    EXPECT_EQ(names.size(), 1u) << "one name, one entry in the map";
+
+    // A genuinely different name still gets its own id.
+    EXPECT_NE(first, names.idForString(kPsInternetHeaders, "Content-Length"));
+    EXPECT_EQ(names.size(), 2u);
+
+    // The same spelling under a different GUID is a different property.
+    EXPECT_NE(first, names.idForString(kPsPublicStrings, "Content-Type"));
+    EXPECT_EQ(names.size(), 3u);
 }
 
 TEST(PstNodes, ReservedNodesArePresent) {
