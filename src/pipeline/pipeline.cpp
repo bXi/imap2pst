@@ -170,6 +170,9 @@ PipelineStats run(imap::ImapClient& client, const PipelineOptions& options,
             // Anything already spooled is served from disk, and only the rest
             // is asked of the server.
             std::vector<RawMessage> raws(batch.size());
+            // Set for a message already counted as failed, so the write loop
+            // below does not count it a second time.
+            std::vector<bool> accounted(batch.size(), false);
             std::vector<imap::MessageMeta> wanted;
             std::vector<std::size_t> wanted_at;
             for (std::size_t i = 0; i < batch.size(); ++i) {
@@ -210,8 +213,11 @@ PipelineStats run(imap::ImapClient& client, const PipelineOptions& options,
                             raws[wanted_at[i]] = client.fetchMessage(folder.raw_name, wanted[i]);
                         } catch (const imap::ImapError& e) {
                             ++stats.failed_messages;
-                            report(log, "warning: UID " + std::to_string(wanted[i].uid) +
-                                            ": " + e.what());
+                            accounted[wanted_at[i]] = true;
+                            stats.failed_uids.push_back(
+                                {folder.full_name, wanted[i].uid, e.what()});
+                            report(log, "warning: " + folder.full_name + " UID " +
+                                            std::to_string(wanted[i].uid) + ": " + e.what());
                             continue;
                         }
                     }
@@ -225,12 +231,40 @@ PipelineStats run(imap::ImapClient& client, const PipelineOptions& options,
             }
 
             for (std::size_t i = 0; i < batch.size(); ++i) {
-                if (raws[i].rfc822.empty()) continue;
-                Message msg = mime::parse(raws[i]);
-                if (batch[i].size) msg.size = batch[i].size;
-                writer.addMessage(id, msg);
+                if (raws[i].rfc822.empty()) {
+                    // A message with no source is a failure, not a no-op: every
+                    // message the server listed has to end up either in the PST
+                    // or in the failure list, or a migration can quietly come
+                    // up short and nothing says so.
+                    if (!accounted[i]) {
+                        ++stats.failed_messages;
+                        stats.failed_uids.push_back(
+                            {folder.full_name, batch[i].uid, "server returned an empty body"});
+                        report(log, "warning: " + folder.full_name + " UID " +
+                                        std::to_string(batch[i].uid) +
+                                        ": server returned an empty body");
+                    }
+                    continue;
+                }
+                // One unreadable message must not cost the migration.  Parsing
+                // runs over whatever the server had, and a mailbox of any size
+                // eventually holds something no parser was written for; the
+                // writer can refuse too, on a property no format allows.  Both
+                // are per-message failures, and both are reported by UID so the
+                // message can be found afterwards.
+                try {
+                    Message msg = mime::parse(raws[i]);
+                    if (batch[i].size) msg.size = batch[i].size;
+                    writer.addMessage(id, msg);
+                    stats.attachments += msg.attachments.size();
+                } catch (const std::exception& e) {
+                    ++stats.failed_messages;
+                    stats.failed_uids.push_back({folder.full_name, batch[i].uid, e.what()});
+                    report(log, "warning: " + folder.full_name + " UID " +
+                                    std::to_string(batch[i].uid) + ": " + e.what());
+                    continue;
+                }
                 ++stats.messages;
-                stats.attachments += msg.attachments.size();
                 if (options.progress_every && stats.messages % options.progress_every == 0) {
                     const auto now = std::chrono::steady_clock::now();
                     const double secs =

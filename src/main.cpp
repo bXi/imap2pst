@@ -150,6 +150,22 @@ int main(int argc, char** argv) {
             std::cout << ", " << stats.failed_messages << " failed";
         }
         std::cout << "\n";
+
+        // Name what was left behind, so the messages can be found on the server
+        // afterwards rather than only counted here.
+        if (!stats.failed_uids.empty()) {
+            std::cerr << "\nThese messages were skipped:\n";
+            std::size_t shown = 0;
+            for (const auto& f : stats.failed_uids) {
+                if (shown++ == 20) {
+                    std::cerr << "  ... and " << (stats.failed_uids.size() - 20)
+                              << " more\n";
+                    break;
+                }
+                std::cerr << "  " << f.folder << " UID " << f.uid << ": " << f.reason
+                          << "\n";
+            }
+        }
         return stats.failed_messages ? 1 : 0;
     } catch (const std::exception& e) {
         std::cerr << "error: " << e.what() << "\n";

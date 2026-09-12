@@ -24,6 +24,7 @@ using pst::test::TempPst;
 // Serves a small two-folder account built out of the .eml fixtures.
 class FixtureTransport : public imap::ImapTransport {
  public:
+    virtual ~FixtureTransport() = default;
     FixtureTransport() {
         folders_ =
             "* LIST (\\HasChildren) \".\" \"INBOX\"\r\n"
@@ -78,6 +79,12 @@ class FixtureTransport : public imap::ImapTransport {
     // Makes the batched path omit `uid`, the way a server that cannot read one
     // message does, so the per-message fallback is exercised.
     void omitFromBatch(std::uint32_t uid) { refuse_batch_for_.insert(uid); }
+
+    // Adds a message whose source is given verbatim, for cases no .eml fixture
+    // would express.
+    void addRaw(const std::string& mailbox, std::uint32_t uid, const std::string& raw) {
+        messages_.push_back({mailbox, uid, raw, "\\Seen", "14-Nov-2023 22:13:20 +0000"});
+    }
 
  private:
     struct Entry {
@@ -164,6 +171,71 @@ TEST(Pipeline, MigratesFoldersAndMessagesIntoAValidPst) {
     // creates (root, the IPM subtree and the special folders the message store
     // advertises).
     EXPECT_EQ(folder_nodes, pst::PstWriter::kBuiltinFolderCount + 3);
+}
+
+// Serves message sources chosen to break a parser rather than to be read.
+class HostileTransport : public FixtureTransport {
+ public:
+    HostileTransport() {
+        addRaw("INBOX", 101, std::string(4096, '\xC3'));           // invalid UTF-8
+        addRaw("INBOX", 102, "");                                   // nothing at all
+        addRaw("INBOX", 103, "Subject: no body\r\n");              // headers only
+        addRaw("INBOX", 104, std::string("\0\0\0\0binary junk", 15));
+        addRaw("INBOX", 105, deeplyNested(64));                     // 64 nested parts
+        addRaw("INBOX", 106, "Content-Type: multipart/mixed; boundary=x\r\n\r\n--x");
+        addRaw("INBOX", 107, hugeHeaders(2000));                    // 2000 headers
+    }
+
+ private:
+    static std::string deeplyNested(int depth) {
+        std::string out = "Subject: deep\r\n";
+        for (int i = 0; i < depth; ++i) {
+            out += "Content-Type: multipart/mixed; boundary=b" + std::to_string(i) +
+                   "\r\n\r\n--b" + std::to_string(i) + "\r\n";
+        }
+        out += "Content-Type: text/plain\r\n\r\nbottom\r\n";
+        for (int i = depth - 1; i >= 0; --i) {
+            out += "--b" + std::to_string(i) + "--\r\n";
+        }
+        return out;
+    }
+
+    static std::string hugeHeaders(int count) {
+        std::string out;
+        for (int i = 0; i < count; ++i) {
+            out += "X-Header-" + std::to_string(i) + ": value " + std::to_string(i) + "\r\n";
+        }
+        return out + "\r\nbody\r\n";
+    }
+};
+
+TEST(Pipeline, HostileMessagesDoNotStopTheRun) {
+    // A mailbox of any size eventually holds something no parser was written
+    // for.  Whatever comes of these individually, the run has to finish and the
+    // PST has to be readable.
+    TempPst tmp;
+    auto transport = std::make_shared<HostileTransport>();
+    imap::ImapClient client(transport);
+
+    PipelineOptions options;
+    options.output_path = tmp.path();
+    options.folders = {"INBOX"};
+
+    PipelineStats stats;
+    ASSERT_NO_THROW(stats = run(client, options));
+
+    // Three fixture messages plus seven hostile ones; every one is either
+    // migrated or reported, never silently dropped.
+    EXPECT_EQ(stats.messages + stats.failed_messages, 10u);
+    EXPECT_EQ(stats.failed_uids.size(), stats.failed_messages);
+
+    const Reader r(readAll(tmp.path()));
+    EXPECT_EQ(r.ibFileEof(), r.size());
+    std::size_t message_nodes = 0;
+    for (pst::Nid nid : r.nodes()) {
+        if (pst::nidType(nid) == pst::kNidTypeNormalMessage) ++message_nodes;
+    }
+    EXPECT_EQ(message_nodes, stats.messages);
 }
 
 TEST(Pipeline, BodiesAreFetchedInBatches) {

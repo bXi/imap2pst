@@ -34,6 +34,14 @@ struct PipelineOptions {
     std::size_t progress_every = 100;
 };
 
+// A message that could not be migrated, kept so the run can name it rather
+// than only count it.
+struct FailedMessage {
+    std::string folder;
+    std::uint32_t uid = 0;
+    std::string reason;
+};
+
 struct PipelineStats {
     std::size_t folders = 0;
     std::size_t messages = 0;
@@ -43,6 +51,7 @@ struct PipelineStats {
     // from the spool instead.
     std::uint64_t fetched_bytes = 0;
     std::size_t reused_messages = 0;
+    std::vector<FailedMessage> failed_uids;
 };
 
 // Runs the migration and writes the PST.  Progress is reported through `log`
