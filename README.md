@@ -233,12 +233,28 @@ likely you are to hit them:
 
 **Outlook**
 
-Verified. A generated PST opens directly in Outlook (build 16.0.10417.20207)
--- no repair pass -- with folder hierarchy, nested folders, message bodies,
+Verified against a real mailbox: 13 folders and 147 messages migrated from an
+IMAP server open directly in Outlook (build 16.0.10417.20207) -- no repair pass,
+no damage report -- with folder hierarchy, nested folders, message bodies,
 attachments, and non-ASCII subjects, sender names and folder names intact.
 
-Getting there took eleven format fixes, and the last one is worth knowing about
-if you touch the NDB layer: **a page's absolute file offset must be a multiple
+Two of the fixes are worth knowing about before touching this code. The first is
+in the LTP layer: **string-named properties are matched without regard to case**,
+so `Content-Type` and `Content-type` are one property and must share one id.
+Minting an id per spelling leaves Outlook holding two map entries for a single
+name; it opens the store but reports it as damaged, and the Inbox Repair Tool
+dereferences the entry it could not resolve and crashes. Header spelling varies
+freely in real mail -- one `Content-type` among 147 messages was enough.
+
+That one is a lesson in what a bisect can and cannot tell you. The failure
+tracked nothing about the message that triggered it: not its content, not its
+folder, not file size, not B-tree depth. Halving the mailbox produced two halves
+that both passed. What identified it was counting name-to-id entries across every
+file already judged: every good one had 89 or fewer, every bad one exactly 90.
+A property of the whole store, invisible in any single message, so no amount of
+narrowing down to "the 68th message" was going to name it.
+
+The second is in the NDB layer: **a page's absolute file offset must be a multiple
 of 512**. Blocks are allocated in 64-byte units, so a page written straight
 after one lands misaligned unless the cursor is advanced first. Outlook
 fail-fasts out of `mspst32.dll` with HRESULT `0x80040813` and the internal
@@ -262,11 +278,11 @@ previously opened. And a PST that Outlook has opened is no longer the file that
 was written, because it adds its own search folders on first open; diffing one of
 those measures the wrong thing.
 
-Still reported by the repair tool, though Outlook opens the file regardless: the
-search folders and their update queues, and node `0xEE1`, a flat list with one
-record per object that Outlook builds for itself. Writing `0xEE1` in Outlook's
-exact format stops even a bare store from opening, so its payload carries
-meaning this writer does not understand -- see the comment in
+Not written, and not required for Outlook to open a store cleanly: the search
+folders and their update queues, and node `0xEE1`, a flat list with one record
+per object that Outlook builds for itself. Writing `0xEE1` in Outlook's exact
+format stops even a bare store from opening, so its payload carries meaning this
+writer does not understand -- see the comment in
 `PstWriter::writeReservedNodes`.
 
 **Transport**
