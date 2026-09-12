@@ -19,6 +19,7 @@ add_library(imap2pst_mime_core STATIC
   mime/charset.cpp
   mime/encodings.cpp
   mime/headers.cpp
+  mime/entity.cpp
 )
 target_include_directories(imap2pst_mime_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(imap2pst_mime_core PUBLIC imap2pst_pst PRIVATE ICU::uc ICU::i18n)

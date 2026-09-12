@@ -9,6 +9,7 @@
 
 #include "mime/charset.h"
 #include "mime/encodings.h"
+#include "mime/entity.h"
 #include "mime/headers.h"
 
 namespace imap2pst::mime {
@@ -203,6 +204,153 @@ TEST(Headers, AddressLists) {
 
     EXPECT_TRUE(parseAddressList("").empty());
     EXPECT_TRUE(parseAddressList("   ").empty());
+}
+
+
+// --------------------------------------------------------------- entities ---
+
+TEST(Entity, SimpleTextPart) {
+    auto e = parseEntity("Subject: hi\r\nContent-Type: text/plain; charset=utf-8\r\n"
+                         "\r\nhello\r\n");
+    EXPECT_EQ(e->mediaType(), "text/plain");
+    EXPECT_EQ(e->charset, "utf-8");
+    EXPECT_EQ(e->body, "hello\r\n");
+    EXPECT_TRUE(e->parts.empty());
+}
+
+TEST(Entity, NoContentTypeMeansTextPlain) {
+    auto e = parseEntity("Subject: hi\r\n\r\nbody\r\n");
+    EXPECT_EQ(e->mediaType(), "text/plain");
+}
+
+TEST(Entity, TransferEncodingIsApplied) {
+    auto e = parseEntity("Content-Type: text/plain\r\n"
+                         "Content-Transfer-Encoding: base64\r\n\r\naGVsbG8=\r\n");
+    EXPECT_EQ(e->body, "hello");
+    // The undecoded bytes are kept as well, which is what lets an attachment
+    // nobody can decode still be carried across.
+    EXPECT_NE(e->raw_body.find("aGVsbG8="), std::string::npos);
+}
+
+TEST(Entity, MultipartIsSplitOnItsBoundary) {
+    const std::string source =
+        "Content-Type: multipart/mixed; boundary=\"sep\"\r\n"
+        "\r\n"
+        "preamble text, which is not a part\r\n"
+        "--sep\r\n"
+        "Content-Type: text/plain\r\n"
+        "\r\n"
+        "first\r\n"
+        "--sep\r\n"
+        "Content-Type: text/html\r\n"
+        "\r\n"
+        "<p>second</p>\r\n"
+        "--sep--\r\n"
+        "epilogue, also not a part\r\n";
+    auto e = parseEntity(source);
+    ASSERT_EQ(e->parts.size(), 2u);
+    EXPECT_EQ(e->parts[0]->mediaType(), "text/plain");
+    EXPECT_EQ(e->parts[0]->body, "first");
+    EXPECT_EQ(e->parts[1]->mediaType(), "text/html");
+    EXPECT_EQ(e->parts[1]->body, "<p>second</p>");
+}
+
+TEST(Entity, BoundaryMustStartItsOwnLine) {
+    // A body that mentions the boundary mid-line must not be split there.
+    const std::string source =
+        "Content-Type: multipart/mixed; boundary=sep\r\n\r\n"
+        "--sep\r\n"
+        "Content-Type: text/plain\r\n\r\n"
+        "the text --sep is quoted here\r\n"
+        "--sep--\r\n";
+    auto e = parseEntity(source);
+    ASSERT_EQ(e->parts.size(), 1u);
+    EXPECT_EQ(e->parts[0]->body, "the text --sep is quoted here");
+}
+
+TEST(Entity, UnterminatedMultipartKeepsWhatItHas) {
+    // Truncated mail is common in archives; the parts before the truncation
+    // should still arrive.
+    const std::string source =
+        "Content-Type: multipart/mixed; boundary=sep\r\n\r\n"
+        "--sep\r\n"
+        "Content-Type: text/plain\r\n\r\n"
+        "survives\r\n";
+    auto e = parseEntity(source);
+    ASSERT_EQ(e->parts.size(), 1u);
+    EXPECT_EQ(e->parts[0]->body, "survives\r\n");
+}
+
+TEST(Entity, MultipartWithoutBoundaryKeepsItsBody) {
+    // Nothing can be split, but the content must not be dropped.
+    auto e = parseEntity("Content-Type: multipart/mixed\r\n\r\nlost structure\r\n");
+    EXPECT_TRUE(e->parts.empty());
+    EXPECT_NE(e->raw_body.find("lost structure"), std::string::npos);
+}
+
+TEST(Entity, NestedMultipart) {
+    const std::string source =
+        "Content-Type: multipart/mixed; boundary=outer\r\n\r\n"
+        "--outer\r\n"
+        "Content-Type: multipart/alternative; boundary=inner\r\n\r\n"
+        "--inner\r\n"
+        "Content-Type: text/plain\r\n\r\nplain\r\n"
+        "--inner\r\n"
+        "Content-Type: text/html\r\n\r\n<p>rich</p>\r\n"
+        "--inner--\r\n"
+        "--outer\r\n"
+        "Content-Type: application/pdf\r\n"
+        "Content-Disposition: attachment; filename=\"report.pdf\"\r\n\r\n"
+        "%PDF-1.4\r\n"
+        "--outer--\r\n";
+    auto e = parseEntity(source);
+    ASSERT_EQ(e->parts.size(), 2u);
+    ASSERT_EQ(e->parts[0]->parts.size(), 2u);
+    EXPECT_EQ(e->parts[0]->parts[1]->mediaType(), "text/html");
+    EXPECT_EQ(e->parts[1]->filename, "report.pdf");
+    EXPECT_EQ(e->parts[1]->disposition, "attachment");
+}
+
+TEST(Entity, EmbeddedMessageIsParsedAsOne) {
+    const std::string source =
+        "Content-Type: message/rfc822\r\n\r\n"
+        "From: carol@example.org\r\n"
+        "Subject: inner\r\n"
+        "Content-Type: text/plain\r\n\r\n"
+        "inner body\r\n";
+    auto e = parseEntity(source);
+    EXPECT_TRUE(e->isMessage());
+    ASSERT_EQ(e->parts.size(), 1u);
+    EXPECT_EQ(headerValue(e->parts[0]->headers, "Subject"), "inner");
+    EXPECT_EQ(e->parts[0]->body, "inner body\r\n");
+}
+
+TEST(Entity, NestingIsBounded) {
+    // A message that nests without end must not take the stack with it.
+    std::string source;
+    for (int i = 0; i < 200; ++i) {
+        source += "Content-Type: message/rfc822\r\n\r\n";
+    }
+    source += "Content-Type: text/plain\r\n\r\nbottom\r\n";
+    auto e = parseEntity(source);
+    int depth = 0;
+    for (const Entity* p = e.get(); !p->parts.empty(); p = p->parts[0].get()) ++depth;
+    EXPECT_LE(depth, kMaxNestingDepth);
+}
+
+TEST(Entity, FilenameFromEitherHeader) {
+    auto disp = parseEntity("Content-Type: application/octet-stream\r\n"
+                            "Content-Disposition: attachment; filename=\"a.bin\"\r\n\r\nx");
+    EXPECT_EQ(disp->filename, "a.bin");
+    // Older senders put it on Content-Type instead.
+    auto ct = parseEntity("Content-Type: application/octet-stream; name=\"b.bin\"\r\n\r\nx");
+    EXPECT_EQ(ct->filename, "b.bin");
+}
+
+TEST(Entity, ContentIdLosesItsAngleBrackets) {
+    auto e = parseEntity("Content-Type: image/png\r\n"
+                         "Content-ID: <image001@example.com>\r\n\r\nx");
+    EXPECT_EQ(e->content_id, "image001@example.com");
 }
 
 }  // namespace
