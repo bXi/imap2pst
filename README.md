@@ -206,15 +206,8 @@ tested.
 
 ## Support
 
-imap2pst is free, and migrations it was written for tend to be the kind nobody
-enjoys doing. If it saved you an afternoon — or a licence fee for a commercial
-migration tool — you can
-[**buy me a coffee on Ko-fi**](https://ko-fi.com/bixxy). Entirely optional, and
-it changes nothing about the tool: no features are held back, and bug reports
-are answered the same either way.
-
-Reporting a bug with the message that triggered it is worth more than a coffee,
-and costs you nothing.
+If imap2pst saved you an afternoon, you can
+[buy me a coffee on Ko-fi](https://ko-fi.com/bixxy).
 
 ## Licence
 
