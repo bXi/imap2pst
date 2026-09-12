@@ -25,14 +25,20 @@ PipelineStats run(imap::ImapClient& client, const PipelineOptions& options,
     if (!options.folders.empty()) {
         std::vector<FolderInfo> filtered;
         for (const auto& f : folders) {
+            // Accept either the display name or the raw one, so --folder works
+            // whichever the user copied.
             if (std::find(options.folders.begin(), options.folders.end(), f.full_name) !=
-                options.folders.end()) {
+                    options.folders.end() ||
+                std::find(options.folders.begin(), options.folders.end(), f.raw_name) !=
+                    options.folders.end()) {
                 filtered.push_back(f);
             }
         }
         for (const auto& want : options.folders) {
-            const bool found = std::any_of(filtered.begin(), filtered.end(),
-                                           [&](const FolderInfo& f) { return f.full_name == want; });
+            const bool found = std::any_of(
+                filtered.begin(), filtered.end(), [&](const FolderInfo& f) {
+                    return f.full_name == want || f.raw_name == want;
+                });
             if (!found) report(log, "warning: folder not found on server: " + want);
         }
         folders = std::move(filtered);
@@ -82,7 +88,7 @@ PipelineStats run(imap::ImapClient& client, const PipelineOptions& options,
         report(log, "Fetching " + folder.full_name);
         std::vector<imap::MessageMeta> metas;
         try {
-            metas = client.listMessages(folder.full_name);
+            metas = client.listMessages(folder.raw_name);
         } catch (const imap::ImapError& e) {
             report(log, "warning: " + folder.full_name + ": " + e.what());
             continue;
@@ -91,7 +97,7 @@ PipelineStats run(imap::ImapClient& client, const PipelineOptions& options,
         for (const auto& meta : metas) {
             RawMessage raw;
             try {
-                raw = client.fetchMessage(folder.full_name, meta);
+                raw = client.fetchMessage(folder.raw_name, meta);
             } catch (const imap::ImapError& e) {
                 ++stats.failed_messages;
                 report(log, "warning: UID " + std::to_string(meta.uid) + ": " + e.what());

@@ -28,6 +28,10 @@ std::vector<FolderInfo> parseListResponse(const std::string& response);
 // Parses the untagged "* n FETCH (...)" lines of a UID FETCH response.
 std::vector<MessageMeta> parseFetchResponse(const std::string& response);
 
+// Decodes an IMAP mailbox name from modified UTF-7 (RFC 3501 5.1.3) to UTF-8.
+// Input that contains no shift sequence is returned unchanged.
+std::string decodeModifiedUtf7(const std::string& name);
+
 // "17-Jul-1996 02:44:25 -0700" -> seconds since the Unix epoch.  0 on failure.
 std::int64_t parseInternalDate(const std::string& value);
 

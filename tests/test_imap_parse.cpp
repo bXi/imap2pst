@@ -48,6 +48,31 @@ TEST(ImapList, HandlesNilDelimiterAndEscapedQuotes) {
     EXPECT_EQ(folders[6].full_name, "Quoted \"Name\" Folder");
 }
 
+TEST(ImapList, DecodesModifiedUtf7MailboxNames) {
+    // RFC 3501 5.1.3.  Servers send non-ASCII mailbox names this way, so a
+    // folder called "Übersicht" arrives as "&ANw-bersicht".
+    EXPECT_EQ(decodeModifiedUtf7("&ANw-bersicht"), "\xC3\x9C" "bersicht");
+    EXPECT_EQ(decodeModifiedUtf7("INBOX"), "INBOX");
+    EXPECT_EQ(decodeModifiedUtf7(" Important"), " Important");
+    // "&-" is a literal ampersand.
+    EXPECT_EQ(decodeModifiedUtf7("Rock &- Roll"), "Rock & Roll");
+    // Japanese: "日本語"
+    EXPECT_EQ(decodeModifiedUtf7("&ZeVnLIqe-"), "\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E");
+    // Outside the BMP, which needs a surrogate pair: U+1F600
+    EXPECT_EQ(decodeModifiedUtf7("&2D3eAA-"), "\xF0\x9F\x98\x80");
+    // A malformed run is kept rather than silently dropped.
+    EXPECT_EQ(decodeModifiedUtf7("&!!!-x"), "&!!!-x");
+}
+
+TEST(ImapList, KeepsTheRawNameForTheServer) {
+    const auto folders = parseListResponse(
+        "* LIST (\\HasNoChildren) \".\" &ANw-bersicht\r\n");
+    ASSERT_EQ(folders.size(), 1u);
+    EXPECT_EQ(folders[0].raw_name, "&ANw-bersicht");
+    EXPECT_EQ(folders[0].full_name, "\xC3\x9C" "bersicht");
+    EXPECT_EQ(folders[0].leaf_name(), "\xC3\x9C" "bersicht");
+}
+
 TEST(ImapFetch, ParsesUidFlagsAndInternalDate) {
     const auto metas = parseFetchResponse(test::readFixture("fetch_response.txt"));
     ASSERT_EQ(metas.size(), 4u);

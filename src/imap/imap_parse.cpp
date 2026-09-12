@@ -95,7 +95,87 @@ std::vector<std::string> splitLines(const std::string& response) {
     return lines;
 }
 
+// Modified BASE64 as RFC 3501 defines it: the usual alphabet except that ','
+// replaces '/', and there is no padding.
+int modifiedBase64Value(char c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == ',') return 63;
+    return -1;
+}
+
+void appendUtf8(std::string* out, std::uint32_t cp) {
+    if (cp < 0x80) {
+        out->push_back(static_cast<char>(cp));
+    } else if (cp < 0x800) {
+        out->push_back(static_cast<char>(0xC0 | (cp >> 6)));
+        out->push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else if (cp < 0x10000) {
+        out->push_back(static_cast<char>(0xE0 | (cp >> 12)));
+        out->push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out->push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else {
+        out->push_back(static_cast<char>(0xF0 | (cp >> 18)));
+        out->push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+        out->push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out->push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    }
+}
+
 }  // namespace
+
+std::string decodeModifiedUtf7(const std::string& name) {
+    std::string out;
+    out.reserve(name.size());
+    std::size_t i = 0;
+    while (i < name.size()) {
+        if (name[i] != '&') {
+            out.push_back(name[i++]);
+            continue;
+        }
+        // "&-" is how a literal ampersand is written.
+        if (i + 1 < name.size() && name[i + 1] == '-') {
+            out.push_back('&');
+            i += 2;
+            continue;
+        }
+        std::size_t end = name.find('-', i + 1);
+        const bool terminated = end != std::string::npos;
+        if (!terminated) end = name.size();
+
+        // Decode the run to UTF-16BE, then to UTF-8, combining surrogates.
+        std::uint32_t bits = 0;
+        int nbits = 0;
+        std::uint32_t high = 0;  // pending high surrogate, 0 when none
+        bool bad = false;
+        for (std::size_t k = i + 1; k < end && !bad; ++k) {
+            const int v = modifiedBase64Value(name[k]);
+            if (v < 0) { bad = true; break; }
+            bits = (bits << 6) | static_cast<std::uint32_t>(v);
+            nbits += 6;
+            if (nbits < 16) continue;
+            nbits -= 16;
+            const std::uint32_t unit = (bits >> nbits) & 0xFFFF;
+            if (unit >= 0xD800 && unit <= 0xDBFF) {
+                high = unit;
+            } else if (unit >= 0xDC00 && unit <= 0xDFFF && high) {
+                appendUtf8(&out, 0x10000 + ((high - 0xD800) << 10) + (unit - 0xDC00));
+                high = 0;
+            } else {
+                appendUtf8(&out, unit);
+                high = 0;
+            }
+        }
+        if (bad) {
+            // Not a valid shift sequence; keep the bytes rather than lose them.
+            out.append(name, i, end - i + (terminated ? 1 : 0));
+        }
+        i = terminated ? end + 1 : end;
+    }
+    return out;
+}
 
 std::uint32_t parseFlags(const std::string& flag_list,
                          std::vector<std::string>* keywords) {
@@ -180,8 +260,9 @@ std::vector<FolderInfo> parseListResponse(const std::string& response) {
         if (!readAstring(line, &i, &delim)) continue;
         info.delimiter = (lower(delim) == "nil" || delim.empty()) ? '\0' : delim[0];
 
-        if (!readAstring(line, &i, &info.full_name)) continue;
-        if (info.full_name.empty()) continue;
+        if (!readAstring(line, &i, &info.raw_name)) continue;
+        if (info.raw_name.empty()) continue;
+        info.full_name = decodeModifiedUtf7(info.raw_name);
         out.push_back(std::move(info));
     }
     return out;

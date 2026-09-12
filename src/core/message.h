@@ -101,8 +101,11 @@ struct RawMessage {
 };
 
 struct FolderInfo {
-    // Server-reported name, e.g. "INBOX.Work.2024".
+    // Display name, decoded from IMAP's modified UTF-7, e.g. "INBOX.Übersicht".
     std::string full_name;
+    // Exactly what the server reported, which is what has to be sent back in a
+    // SELECT or FETCH.  Differs from full_name whenever the name is not ASCII.
+    std::string raw_name;
     // Hierarchy delimiter reported by LIST, '\0' when the server reports NIL.
     char delimiter = '/';
     bool selectable = true;
