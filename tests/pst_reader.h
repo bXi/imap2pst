@@ -8,6 +8,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -29,6 +30,25 @@ class TempPst {
         path_ = pattern;
     }
     ~TempPst() { std::remove(path_.c_str()); }
+    const std::string& path() const { return path_; }
+
+ private:
+    std::string path_;
+};
+
+// A directory that goes away with the test, for anything the code under test
+// writes beside the PST itself.
+class TempDir {
+ public:
+    TempDir() {
+        char pattern[] = "/tmp/imap2pst_test_dir_XXXXXX";
+        const char* made = ::mkdtemp(pattern);
+        path_ = made ? made : pattern;
+    }
+    ~TempDir() {
+        std::error_code ec;
+        std::filesystem::remove_all(path_, ec);
+    }
     const std::string& path() const { return path_; }
 
  private:

@@ -18,6 +18,7 @@ namespace {
 
 using pst::test::readAll;
 using pst::test::Reader;
+using pst::test::TempDir;
 using pst::test::TempPst;
 
 // Serves a small two-folder account built out of the .eml fixtures.
@@ -39,6 +40,21 @@ class FixtureTransport : public imap::ImapTransport {
     std::string command(const std::string& mailbox,
                         const std::string& command_line) override {
         if (command_line.rfind("LIST", 0) == 0) return folders_;
+
+        // A body fetch names BODY.PEEK[]; anything else is the metadata pass.
+        if (command_line.find("BODY.PEEK[]") != std::string::npos) {
+            ++body_batches_;
+            std::string response;
+            for (const auto& m : messages_) {
+                if (m.mailbox != mailbox) continue;
+                if (!inSet(command_line, m.uid)) continue;
+                if (refuse_batch_for_.count(m.uid)) continue;
+                response += "* 1 FETCH (UID " + std::to_string(m.uid) + " BODY[] {" +
+                            std::to_string(m.raw.size()) + "}\r\n" + m.raw + ")\r\n";
+            }
+            return response;
+        }
+
         std::string response;
         for (const auto& m : messages_) {
             if (m.mailbox != mailbox) continue;
@@ -50,11 +66,18 @@ class FixtureTransport : public imap::ImapTransport {
     }
 
     std::string fetchBody(const std::string& mailbox, std::uint32_t uid) override {
+        ++single_fetches_;
         for (const auto& m : messages_) {
             if (m.mailbox == mailbox && m.uid == uid) return m.raw;
         }
         throw imap::ImapError("no such message");
     }
+
+    std::size_t bodyBatches() const { return body_batches_; }
+    std::size_t singleFetches() const { return single_fetches_; }
+    // Makes the batched path omit `uid`, the way a server that cannot read one
+    // message does, so the per-message fallback is exercised.
+    void omitFromBatch(std::uint32_t uid) { refuse_batch_for_.insert(uid); }
 
  private:
     struct Entry {
@@ -74,8 +97,35 @@ class FixtureTransport : public imap::ImapTransport {
                              "14-Nov-2023 22:13:20 +0000"});
     }
 
+    // Crude but sufficient: the sequence set this fixture ever sees is a comma
+    // separated list of single UIDs and ranges.
+    static bool inSet(const std::string& command_line, std::uint32_t uid) {
+        const std::size_t at = command_line.find("UID FETCH ");
+        if (at == std::string::npos) return false;
+        std::string set = command_line.substr(at + 10);
+        set = set.substr(0, set.find(' '));
+        std::size_t i = 0;
+        while (i < set.size()) {
+            const std::size_t comma = std::min(set.find(',', i), set.size());
+            const std::string part = set.substr(i, comma - i);
+            const std::size_t colon = part.find(':');
+            if (colon == std::string::npos) {
+                if (std::stoul(part) == uid) return true;
+            } else {
+                const unsigned long lo = std::stoul(part.substr(0, colon));
+                const unsigned long hi = std::stoul(part.substr(colon + 1));
+                if (uid >= lo && uid <= hi) return true;
+            }
+            i = comma + 1;
+        }
+        return false;
+    }
+
     std::string folders_;
     std::vector<Entry> messages_;
+    std::set<std::uint32_t> refuse_batch_for_;
+    std::size_t body_batches_ = 0;
+    std::size_t single_fetches_ = 0;
 };
 
 TEST(Pipeline, MigratesFoldersAndMessagesIntoAValidPst) {
@@ -114,6 +164,96 @@ TEST(Pipeline, MigratesFoldersAndMessagesIntoAValidPst) {
     // creates (root, the IPM subtree and the special folders the message store
     // advertises).
     EXPECT_EQ(folder_nodes, pst::PstWriter::kBuiltinFolderCount + 3);
+}
+
+TEST(Pipeline, BodiesAreFetchedInBatches) {
+    // Five messages across two selectable folders: one round trip each, not one
+    // per message.  This is the difference between a mailbox that migrates in
+    // minutes and one that takes hours.
+    TempPst tmp;
+    auto transport = std::make_shared<FixtureTransport>();
+    imap::ImapClient client(transport);
+
+    PipelineOptions options;
+    options.output_path = tmp.path();
+
+    const PipelineStats stats = run(client, options);
+    EXPECT_EQ(stats.messages, 5u);
+    EXPECT_EQ(transport->bodyBatches(), 2u);
+    EXPECT_EQ(transport->singleFetches(), 0u);
+    EXPECT_GT(stats.fetched_bytes, 0u);
+}
+
+TEST(Pipeline, BatchSizeSplitsTheWork) {
+    TempPst tmp;
+    auto transport = std::make_shared<FixtureTransport>();
+    imap::ImapClient client(transport);
+
+    PipelineOptions options;
+    options.output_path = tmp.path();
+    options.batch_size = 2;
+
+    const PipelineStats stats = run(client, options);
+    EXPECT_EQ(stats.messages, 5u);
+    // INBOX holds three (2 + 1) and INBOX.Work two.
+    EXPECT_EQ(transport->bodyBatches(), 3u);
+    EXPECT_EQ(transport->singleFetches(), 0u);
+}
+
+TEST(Pipeline, MessageMissingFromABatchIsFetchedOnItsOwn) {
+    TempPst tmp;
+    auto transport = std::make_shared<FixtureTransport>();
+    transport->omitFromBatch(2);
+    imap::ImapClient client(transport);
+
+    PipelineOptions options;
+    options.output_path = tmp.path();
+
+    const PipelineStats stats = run(client, options);
+    EXPECT_EQ(stats.messages, 5u) << "the omitted message must still arrive";
+    EXPECT_EQ(stats.failed_messages, 0u);
+    EXPECT_EQ(transport->singleFetches(), 1u);
+}
+
+TEST(Pipeline, SpoolIsReusedOnASecondRun) {
+    // What makes an interrupted migration cheap to restart: the second run
+    // fetches nothing, because every message is already on disk.
+    TempDir spool;
+    {
+        TempPst tmp;
+        auto transport = std::make_shared<FixtureTransport>();
+        imap::ImapClient client(transport);
+        PipelineOptions options;
+        options.output_path = tmp.path();
+        options.spool_dir = spool.path();
+        const PipelineStats stats = run(client, options);
+        EXPECT_EQ(stats.messages, 5u);
+        EXPECT_EQ(stats.reused_messages, 0u);
+        EXPECT_GT(transport->bodyBatches(), 0u);
+    }
+    {
+        TempPst tmp;
+        auto transport = std::make_shared<FixtureTransport>();
+        imap::ImapClient client(transport);
+        PipelineOptions options;
+        options.output_path = tmp.path();
+        options.spool_dir = spool.path();
+        const PipelineStats stats = run(client, options);
+        EXPECT_EQ(stats.messages, 5u);
+        EXPECT_EQ(stats.reused_messages, 5u);
+        EXPECT_EQ(stats.fetched_bytes, 0u);
+        EXPECT_EQ(transport->bodyBatches(), 0u);
+        EXPECT_EQ(transport->singleFetches(), 0u);
+
+        // The PST built from the spool is the same file as the one built from
+        // the server, message for message.
+        const Reader r(readAll(tmp.path()));
+        std::size_t message_nodes = 0;
+        for (pst::Nid nid : r.nodes()) {
+            if (pst::nidType(nid) == pst::kNidTypeNormalMessage) ++message_nodes;
+        }
+        EXPECT_EQ(message_nodes, 5u);
+    }
 }
 
 TEST(Pipeline, FolderFilterRestrictsWhatIsMigrated) {

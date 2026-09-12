@@ -237,6 +237,22 @@ std::int64_t parseInternalDate(const std::string& value) {
     return static_cast<std::int64_t>(utc) - offset;
 }
 
+std::string uidSet(const std::vector<std::uint32_t>& uids) {
+    std::string out;
+    for (std::size_t i = 0; i < uids.size();) {
+        std::size_t j = i;
+        while (j + 1 < uids.size() && uids[j + 1] == uids[j] + 1) ++j;
+        if (!out.empty()) out.push_back(',');
+        out += std::to_string(uids[i]);
+        if (j > i) {
+            out.push_back(':');
+            out += std::to_string(uids[j]);
+        }
+        i = j + 1;
+    }
+    return out;
+}
+
 std::vector<FolderInfo> parseListResponse(const std::string& response) {
     std::vector<FolderInfo> out;
     for (const auto& line : splitLines(response)) {
@@ -264,6 +280,42 @@ std::vector<FolderInfo> parseListResponse(const std::string& response) {
         if (info.raw_name.empty()) continue;
         info.full_name = decodeModifiedUtf7(info.raw_name);
         out.push_back(std::move(info));
+    }
+    return out;
+}
+
+std::vector<FetchedBody> parseFetchBodies(const std::string& response) {
+    std::vector<FetchedBody> out;
+    for (const auto& line : splitLines(response)) {
+        if (line.empty() || line[0] != '*') continue;
+        const std::size_t fetch = lower(line).find(" fetch ");
+        if (fetch == std::string::npos) continue;
+
+        FetchedBody body;
+        bool have_uid = false, have_body = false;
+        std::size_t i = fetch + 7;
+        while (i < line.size()) {
+            skipSpace(line, &i);
+            if (i >= line.size()) break;
+            if (line[i] == '(' || line[i] == ')') { ++i; continue; }
+            std::string key;
+            if (!readAstring(line, &i, &key)) break;
+            const std::string k = lower(key);
+            if (k == "uid") {
+                std::string v;
+                if (readAstring(line, &i, &v)) {
+                    body.uid = static_cast<std::uint32_t>(std::strtoul(v.c_str(), nullptr, 10));
+                    have_uid = true;
+                }
+            } else if (k.compare(0, 5, "body[") == 0 || k == "rfc822") {
+                // A partial fetch answers "BODY[]<0>"; the octets still follow.
+                if (readAstring(line, &i, &body.rfc822)) have_body = true;
+            } else {
+                std::string ignored;
+                if (!readAstring(line, &i, &ignored)) break;
+            }
+        }
+        if (have_uid && have_body) out.push_back(std::move(body));
     }
     return out;
 }

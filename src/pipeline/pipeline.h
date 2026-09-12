@@ -17,6 +17,21 @@ struct PipelineOptions {
     // selectable folder the server lists".
     std::vector<std::string> folders;
     bool verbose = false;
+
+    // How many messages to ask for per round trip.  One UID FETCH naming many
+    // messages is far cheaper than one per message, but the whole batch is held
+    // in memory, so `batch_bytes` caps a batch that turns out to be large.
+    std::size_t batch_size = 50;
+    std::size_t batch_bytes = 32u * 1024 * 1024;
+
+    // Directory holding fetched message source.  When set, a message already in
+    // the spool is not fetched again, so a re-run after an interruption pays
+    // only for what it had not yet downloaded.  The PST itself is always
+    // written from scratch.
+    std::string spool_dir;
+
+    // How often to report progress, in messages.  0 turns it off.
+    std::size_t progress_every = 100;
 };
 
 struct PipelineStats {
@@ -24,6 +39,10 @@ struct PipelineStats {
     std::size_t messages = 0;
     std::size_t attachments = 0;
     std::size_t failed_messages = 0;
+    // Message source bytes fetched from the server, and the count that came
+    // from the spool instead.
+    std::uint64_t fetched_bytes = 0;
+    std::size_t reused_messages = 0;
 };
 
 // Runs the migration and writes the PST.  Progress is reported through `log`

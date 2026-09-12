@@ -2,8 +2,13 @@
 
 #include <curl/curl.h>
 
+#include <algorithm>
+
+#include <chrono>
 #include <cstring>
+#include <map>
 #include <sstream>
+#include <thread>
 
 namespace imap2pst::imap {
 namespace {
@@ -93,13 +98,30 @@ std::string CurlTransport::run(const std::string& u, const std::string& custom_r
     return body;
 }
 
+// Runs `fn`, retrying a failure with a widening pause.  curl reconnects on its
+// own when the handle's connection has gone away, so a retry covers both a
+// dropped socket and a server that answered with an error.
+std::string CurlTransport::withRetries(const std::function<std::string()>& fn) {
+    const int attempts = config_.retry_attempts < 1 ? 1 : config_.retry_attempts;
+    long backoff = config_.retry_backoff_ms;
+    for (int attempt = 1;; ++attempt) {
+        try {
+            return fn();
+        } catch (const ImapError&) {
+            if (attempt >= attempts) throw;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(backoff));
+        backoff *= 2;
+    }
+}
+
 std::string CurlTransport::command(const std::string& mailbox,
                                    const std::string& command_line) {
-    return run(url(mailbox), command_line);
+    return withRetries([&] { return run(url(mailbox), command_line); });
 }
 
 std::string CurlTransport::fetchBody(const std::string& mailbox, std::uint32_t uid) {
-    return run(url(mailbox, ";UID=" + std::to_string(uid)), {});
+    return withRetries([&] { return run(url(mailbox, ";UID=" + std::to_string(uid)), {}); });
 }
 
 // --------------------------------------------------------------- ImapClient
@@ -123,6 +145,34 @@ RawMessage ImapClient::fetchMessage(const std::string& mailbox, const MessageMet
     raw.internal_date = meta.internal_date;
     raw.rfc822 = transport_->fetchBody(mailbox, meta.uid);
     return raw;
+}
+
+std::vector<RawMessage> ImapClient::fetchMessages(const std::string& mailbox,
+                                                  const std::vector<MessageMeta>& metas) {
+    std::vector<RawMessage> out(metas.size());
+    for (std::size_t i = 0; i < metas.size(); ++i) {
+        out[i].uid = metas[i].uid;
+        out[i].flags = metas[i].flags;
+        out[i].keywords = metas[i].keywords;
+        out[i].internal_date = metas[i].internal_date;
+    }
+    if (metas.empty()) return out;
+
+    std::vector<std::uint32_t> uids;
+    uids.reserve(metas.size());
+    for (const auto& m : metas) uids.push_back(m.uid);
+    std::sort(uids.begin(), uids.end());
+
+    const std::string response =
+        transport_->command(mailbox, "UID FETCH " + uidSet(uids) + " (UID BODY.PEEK[])");
+
+    std::map<std::uint32_t, std::string> bodies;
+    for (auto& b : parseFetchBodies(response)) bodies[b.uid] = std::move(b.rfc822);
+    for (std::size_t i = 0; i < metas.size(); ++i) {
+        auto it = bodies.find(metas[i].uid);
+        if (it != bodies.end()) out[i].rfc822 = std::move(it->second);
+    }
+    return out;
 }
 
 std::vector<RawMessage> ImapClient::fetchFolder(const std::string& mailbox) {

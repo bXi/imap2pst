@@ -23,9 +23,19 @@ void usage(const char* argv0) {
         "  --insecure             Do not verify the server certificate\n"
         "  --timeout N            Per-request timeout in seconds (default 120)\n"
         "\n"
+        "  --retries N            Attempts per request before giving up (default 3)\n"
+        "\n"
         "Selection and output:\n"
         "  --output FILE.pst      Destination PST file (required)\n"
         "  --folder NAME          Migrate only this folder; repeatable\n"
+        "\n"
+        "Throughput and restarts:\n"
+        "  --batch N              Messages per fetch round trip (default 50)\n"
+        "  --batch-bytes N        Cap on one batch's message source (default 32M)\n"
+        "  --spool DIR            Keep fetched message source here and reuse it,\n"
+        "                         so a re-run does not download it again\n"
+        "  --progress N           Report every N messages (default 100, 0 off)\n"
+        "  --quiet                Only report the final summary\n"
         "  --verbose              Log progress and libcurl traffic\n";
 }
 
@@ -40,6 +50,7 @@ bool needsValue(int i, int argc, const char* flag) {
 int main(int argc, char** argv) {
     imap2pst::imap::ImapConfig cfg;
     imap2pst::PipelineOptions opts;
+    bool quiet = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -84,6 +95,24 @@ int main(int argc, char** argv) {
         } else if (arg == "--folder") {
             if (!needsValue(i, argc, "--folder")) return 2;
             opts.folders.push_back(value());
+        } else if (arg == "--retries") {
+            if (!needsValue(i, argc, "--retries")) return 2;
+            cfg.retry_attempts = std::atoi(value().c_str());
+        } else if (arg == "--batch") {
+            if (!needsValue(i, argc, "--batch")) return 2;
+            opts.batch_size = std::strtoul(value().c_str(), nullptr, 10);
+            if (opts.batch_size == 0) opts.batch_size = 1;
+        } else if (arg == "--batch-bytes") {
+            if (!needsValue(i, argc, "--batch-bytes")) return 2;
+            opts.batch_bytes = std::strtoull(value().c_str(), nullptr, 10);
+        } else if (arg == "--spool") {
+            if (!needsValue(i, argc, "--spool")) return 2;
+            opts.spool_dir = value();
+        } else if (arg == "--progress") {
+            if (!needsValue(i, argc, "--progress")) return 2;
+            opts.progress_every = std::strtoul(value().c_str(), nullptr, 10);
+        } else if (arg == "--quiet") {
+            quiet = true;
         } else if (arg == "--verbose") {
             opts.verbose = true;
             cfg.verbose = true;
@@ -102,14 +131,21 @@ int main(int argc, char** argv) {
     try {
         auto transport = std::make_shared<imap2pst::imap::CurlTransport>(cfg);
         imap2pst::imap::ImapClient client(transport);
-        const auto stats = imap2pst::run(
-            client, opts,
-            opts.verbose ? std::function<void(const std::string&)>(
-                               [](const std::string& m) { std::cerr << m << "\n"; })
-                         : std::function<void(const std::string&)>{});
+        // Progress goes to stderr by default: a migration of any size is long
+        // enough that silence is indistinguishable from a hang.
+        std::function<void(const std::string&)> log;
+        if (!quiet) {
+            log = [](const std::string& m) { std::cerr << m << "\n"; };
+        } else {
+            opts.progress_every = 0;
+        }
+        const auto stats = imap2pst::run(client, opts, log);
         std::cout << "Wrote " << opts.output_path << ": " << stats.folders
                   << " folder(s), " << stats.messages << " message(s), "
                   << stats.attachments << " attachment(s)";
+        if (stats.reused_messages) {
+            std::cout << ", " << stats.reused_messages << " from the spool";
+        }
         if (stats.failed_messages) {
             std::cout << ", " << stats.failed_messages << " failed";
         }

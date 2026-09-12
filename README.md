@@ -103,10 +103,28 @@ Options:
 --no-tls               Plain IMAP, with opportunistic STARTTLS
 --insecure             Skip server certificate verification
 --timeout N            Per-request timeout in seconds (default 120)
+--retries N            Attempts per request before giving up (default 3)
 --output FILE.pst      Destination PST (required)
 --folder NAME          Migrate only this folder; repeat for several
+--batch N              Messages per fetch round trip (default 50)
+--batch-bytes N        Cap on one batch's message source (default 32M)
+--spool DIR            Keep fetched message source here and reuse it
+--progress N           Report every N messages (default 100, 0 off)
+--quiet                Only print the final summary
 --verbose              Log progress, and libcurl's own protocol trace
 ```
+
+Bodies are fetched a batch at a time -- one `UID FETCH` naming up to `--batch`
+messages, rather than one request each. The batch is held in memory while it is
+parsed, so `--batch-bytes` closes it early when the messages it names turn out
+to be large; a folder of 50 MB attachments does not become a 50 MB batch.
+
+`--spool DIR` keeps each message's source on disk and reuses it on a later run,
+which is what makes an interrupted migration cheap to restart: the second run
+pays only for what the first had not yet downloaded. The PST is always rebuilt
+from scratch, so the restart is not resuming a half-written file -- it is
+skipping the download. The spool is plain RFC 822 source, one file per message,
+and can be deleted at any time.
 
 Folder hierarchy is preserved. The server's `LIST` delimiter is used to split
 names, so `INBOX.Work.2024` on a Courier-style server becomes

@@ -114,5 +114,44 @@ TEST(ImapFlags, MapsSystemFlagsAndKeepsKeywords) {
     EXPECT_EQ(keywords[1], "$Junk");
 }
 
+TEST(ImapParse, UidSetCollapsesRuns) {
+    EXPECT_EQ(uidSet({}), "");
+    EXPECT_EQ(uidSet({7}), "7");
+    EXPECT_EQ(uidSet({1, 2, 3}), "1:3");
+    EXPECT_EQ(uidSet({1, 2, 3, 7}), "1:3,7");
+    EXPECT_EQ(uidSet({1, 3, 5}), "1,3,5");
+    EXPECT_EQ(uidSet({4, 5, 9, 10, 11, 20}), "4:5,9:11,20");
+}
+
+TEST(ImapParse, BatchedBodiesAreSplitByUid) {
+    // Two messages in one response, each introduced by its own literal.  The
+    // second body contains a ")" and a line that looks like a FETCH reply, so a
+    // parser that scanned for delimiters instead of honouring the octet count
+    // would mis-split here.
+    const std::string first = "Subject: one\r\n\r\nbody one\r\n";
+    const std::string second =
+        "Subject: two\r\n\r\n* 1 FETCH (UID 999 BODY[] {5}\r\nnope)\r\n";
+    const std::string response =
+        "* 1 FETCH (UID 11 BODY[] {" + std::to_string(first.size()) + "}\r\n" + first +
+        ")\r\n"
+        "* 2 FETCH (UID 12 BODY[] {" + std::to_string(second.size()) + "}\r\n" + second +
+        ")\r\n";
+
+    const auto bodies = parseFetchBodies(response);
+    ASSERT_EQ(bodies.size(), 2u);
+    EXPECT_EQ(bodies[0].uid, 11u);
+    EXPECT_EQ(bodies[0].rfc822, first);
+    EXPECT_EQ(bodies[1].uid, 12u);
+    EXPECT_EQ(bodies[1].rfc822, second);
+}
+
+TEST(ImapParse, BatchedBodyWithoutUidIsSkipped) {
+    // Without a UID there is no way to say which message the octets belong to,
+    // and guessing would silently file mail under the wrong message.
+    const auto bodies = parseFetchBodies("* 1 FETCH (BODY[] {2}\r\nhi)\r\n");
+    EXPECT_TRUE(bodies.empty());
+}
+
 }  // namespace
 }  // namespace imap2pst::imap
+

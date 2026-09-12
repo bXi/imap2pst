@@ -22,11 +22,26 @@ struct MessageMeta {
     std::uint32_t size = 0;
 };
 
+// Collapses a sorted UID list into an IMAP sequence set: "1,2,3,7" -> "1:3,7".
+// Keeping it short matters because a batched fetch names every UID it wants.
+std::string uidSet(const std::vector<std::uint32_t>& uids);
+
 // Parses the untagged "* LIST (...) "delim" name" lines of a LIST response.
 std::vector<FolderInfo> parseListResponse(const std::string& response);
 
 // Parses the untagged "* n FETCH (...)" lines of a UID FETCH response.
 std::vector<MessageMeta> parseFetchResponse(const std::string& response);
+
+// One message body from a batched "UID FETCH <set> (UID BODY.PEEK[])".
+struct FetchedBody {
+    std::uint32_t uid = 0;
+    std::string rfc822;
+};
+
+// Parses the bodies out of a batched fetch.  A response that interleaves
+// several messages yields one entry each, in the order the server sent them;
+// entries whose UID or body is missing are skipped rather than guessed at.
+std::vector<FetchedBody> parseFetchBodies(const std::string& response);
 
 // Decodes an IMAP mailbox name from modified UTF-7 (RFC 3501 5.1.3) to UTF-8.
 // Input that contains no shift sequence is returned unchanged.
