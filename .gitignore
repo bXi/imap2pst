@@ -3,3 +3,4 @@ build-*/
 .venv/
 *.pst
 compile_commands.json
+build-pkg/

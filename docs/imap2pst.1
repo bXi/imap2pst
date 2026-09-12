@@ -1,0 +1,129 @@
+.TH IMAP2PST 1 "2026" "imap2pst 0.1.0" "User Commands"
+.SH NAME
+imap2pst \- migrate an IMAP mailbox into a Microsoft Outlook PST file
+.SH SYNOPSIS
+.B imap2pst
+.B \-\-host
+.I HOST
+.B \-\-user
+.I USER
+.B \-\-output
+.I FILE.pst
+.RI [ options ]
+.SH DESCRIPTION
+.B imap2pst
+connects to an IMAP server, fetches every message in every folder, and writes a
+Unicode PST file that Microsoft Outlook opens directly. It runs headless on
+Linux and needs neither Outlook nor MAPI nor Windows.
+.PP
+Folder hierarchy, message bodies, attachments, embedded messages and non-ASCII
+text are preserved. The PST is written as the migration runs, so memory stays
+proportional to the number of messages rather than to the size of the mailbox.
+.SH OPTIONS
+.SS Connection
+.TP
+.BI \-\-host " HOST"
+IMAP server hostname. Required.
+.TP
+.BI \-\-port " N"
+Port. Defaults to 993 with TLS, 143 without.
+.TP
+.BI \-\-user " USER"
+Login name. Required.
+.TP
+.BI \-\-password " PASS"
+Password. Visible in the process list; prefer
+.BR \-\-password\-env .
+.TP
+.BI \-\-password\-env " VAR"
+Read the password from the named environment variable.
+.TP
+.BI \-\-oauth2\-bearer " TOKEN"
+Use an XOAUTH2 bearer token instead of a password. Untested against a real
+provider.
+.TP
+.B \-\-no\-tls
+Plain IMAP, upgrading opportunistically when the server offers STARTTLS.
+.TP
+.B \-\-insecure
+Do not verify the server certificate.
+.TP
+.BI \-\-timeout " N"
+Per-request timeout in seconds. Default 120.
+.TP
+.BI \-\-retries " N"
+Attempts per request before giving up. Default 3.
+.SS Selection and output
+.TP
+.BI \-\-output " FILE.pst"
+Destination PST file. Required.
+.TP
+.BI \-\-folder " NAME"
+Migrate only this folder. May be repeated.
+.SS Throughput and restarts
+.TP
+.BI \-\-batch " N"
+Messages per fetch round trip. Default 50.
+.TP
+.BI \-\-batch\-bytes " N"
+Cap on the message source held in one batch. Default 32M.
+.TP
+.BI \-\-spool " DIR"
+Keep fetched message source in this directory and reuse it on a later run, so
+an interrupted migration does not download it again. The PST itself is always
+rebuilt from scratch.
+.TP
+.BI \-\-progress " N"
+Report progress every N messages. Default 100; 0 turns it off.
+.TP
+.B \-\-quiet
+Print only the final summary.
+.TP
+.B \-\-verbose
+Log progress and libcurl's own protocol trace.
+.SH EXIT STATUS
+.TP
+.B 0
+Every message was migrated.
+.TP
+.B 1
+The run finished but some messages could not be fetched or parsed. They are
+listed by folder and UID on standard error.
+.TP
+.B 2
+The command line was wrong.
+.SH EXAMPLES
+Migrate a whole account, reading the password from the environment:
+.PP
+.nf
+.RS
+IMAP_PASSWORD=secret imap2pst \\
+    \-\-host imap.example.com \\
+    \-\-user alice@example.com \\
+    \-\-password\-env IMAP_PASSWORD \\
+    \-\-output alice.pst
+.RE
+.fi
+.PP
+Migrate one folder, keeping a spool so a second run is cheap:
+.PP
+.nf
+.RS
+imap2pst \-\-host imap.example.com \-\-user alice@example.com \\
+    \-\-password\-env IMAP_PASSWORD \-\-folder INBOX \\
+    \-\-spool /var/cache/imap2pst \-\-output inbox.pst
+.RE
+.fi
+.SH SECURITY
+.B \-\-password
+puts the secret in the process list, where any user on the machine can read it.
+Use
+.B \-\-password\-env
+instead. The spool directory holds message source in plain text; it is the
+whole mailbox on disk, unencrypted, and should be treated accordingly.
+.SH SEE ALSO
+.BR imapsync (1)
+.SH BUGS
+The PST is written append-only: nothing is freed or reused, so the file is
+larger than one Outlook would write. Calendar items, contacts and tasks
+arriving over IMAP are stored as ordinary mail.

@@ -14,6 +14,7 @@ if(IMAP2PST_BUILD_TESTS)
     GIT_REPOSITORY https://github.com/google/googletest.git
     GIT_TAG        v1.15.2
     GIT_SHALLOW    TRUE
+    EXCLUDE_FROM_ALL
   )
   set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
   set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
@@ -25,7 +26,11 @@ endif()
 # Only the IMAP/IMAPS protocols are of interest; everything else is disabled to
 # keep the build short.  TLS comes from the system OpenSSL.
 if(IMAP2PST_WITH_IMAP)
-  find_package(CURL QUIET)
+  if(IMAP2PST_USE_SYSTEM_DEPS)
+    find_package(CURL REQUIRED)
+  else()
+    find_package(CURL QUIET)
+  endif()
   if(CURL_FOUND)
     message(STATUS "Using system libcurl ${CURL_VERSION_STRING}")
     add_library(imap2pst_curl INTERFACE)
@@ -48,10 +53,14 @@ if(IMAP2PST_WITH_IMAP)
       set(CURL_DISABLE_${proto} ON CACHE BOOL "" FORCE)
     endforeach()
 
+    # EXCLUDE_FROM_ALL keeps curl's own install rules out of ours.  Without it a
+    # package built from this tree ships curl-config, the curl headers, its man
+    # pages and libcurl.a alongside the binary.
     FetchContent_Declare(curl
       GIT_REPOSITORY https://github.com/curl/curl.git
       GIT_TAG        curl-8_10_1
       GIT_SHALLOW    TRUE
+      EXCLUDE_FROM_ALL
     )
     FetchContent_MakeAvailable(curl)
     add_library(imap2pst_curl INTERFACE)
@@ -64,7 +73,17 @@ endif()
 # SMTP, maildir, sendmail) is switched off: we do transport with libcurl, and
 # leaving the sendmail protocol enabled makes vmime's configure step fail when
 # no sendmail binary is installed.
-if(IMAP2PST_WITH_MIME)
+if(IMAP2PST_WITH_MIME AND IMAP2PST_USE_SYSTEM_DEPS)
+  # What a distribution package wants: the system copy, patched by whoever
+  # ships it, and named as a real dependency in the package metadata.  Debian
+  # and Ubuntu carry libvmime-dev; Fedora does not, so a self-contained build
+  # is the fallback there.
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(VMIME REQUIRED IMPORTED_TARGET vmime)
+  add_library(vmime-static INTERFACE)
+  target_link_libraries(vmime-static INTERFACE PkgConfig::VMIME)
+  message(STATUS "Using system vmime ${VMIME_VERSION}")
+elseif(IMAP2PST_WITH_MIME)
   set(VMIME_BUILD_SHARED_LIBRARY      OFF CACHE BOOL "" FORCE)
   set(VMIME_BUILD_STATIC_LIBRARY      ON  CACHE BOOL "" FORCE)
   set(VMIME_BUILD_TESTS               OFF CACHE BOOL "" FORCE)
@@ -82,6 +101,7 @@ if(IMAP2PST_WITH_MIME)
     GIT_REPOSITORY https://github.com/kisli/vmime.git
     GIT_TAG        5b0191136f84c177b737c9cf9aa7cf59d1c65ef1
     GIT_SHALLOW    FALSE
+    EXCLUDE_FROM_ALL
   )
   FetchContent_MakeAvailable(vmime)
 

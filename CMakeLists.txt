@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
-project(imap2pst VERSION 0.1.0 LANGUAGES CXX)
+project(imap2pst
+  VERSION 0.1.0
+  DESCRIPTION "Migrate IMAP mailboxes into Microsoft Outlook PST files"
+  HOMEPAGE_URL "https://github.com/your-org/imap2pst"
+  LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -10,6 +14,8 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 option(IMAP2PST_BUILD_TESTS "Build the unit and round-trip test suite" ON)
+option(IMAP2PST_USE_SYSTEM_DEPS
+       "Link the system libcurl and vmime instead of building them" OFF)
 option(IMAP2PST_WITH_IMAP   "Build the libcurl-backed IMAP transport" ON)
 option(IMAP2PST_WITH_MIME   "Build the vmime-backed MIME parser" ON)
 
@@ -23,10 +29,15 @@ if(IMAP2PST_BUILD_TESTS)
   add_subdirectory(tests)
 endif()
 
+if(IMAP2PST_WITH_IMAP AND IMAP2PST_WITH_MIME)
+  include(Packaging)
+endif()
+
 message(STATUS "")
 message(STATUS "imap2pst ${PROJECT_VERSION}")
 message(STATUS "  build type ....... ${CMAKE_BUILD_TYPE}")
 message(STATUS "  IMAP transport ... ${IMAP2PST_WITH_IMAP}")
 message(STATUS "  MIME parser ...... ${IMAP2PST_WITH_MIME}")
 message(STATUS "  tests ............ ${IMAP2PST_BUILD_TESTS}")
+message(STATUS "  system deps ...... ${IMAP2PST_USE_SYSTEM_DEPS}")
 message(STATUS "")
