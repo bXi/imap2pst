@@ -232,13 +232,25 @@ likely you are to hit them:
 
 **Fidelity**
 
-* **No RTF body.** `PidTagRtfCompressed` is not written; bodies are stored as
-  `PidTagBody` and `PidTagHtml` with `PidTagInternetCodepage` set to UTF-8.
-* **Message class is always `IPM.Note`.** Calendar items, contacts and tasks
-  arriving over IMAP are stored as ordinary mail.
-* **Read state and the flagged flag only.** `\Seen` becomes `MSGFLAG_READ`,
-  `\Flagged` becomes `PidTagFlagStatus`. Other IMAP keywords survive on the
-  in-memory `Message` but are not yet written to the PST.
+* **RTF only for plain-text messages.** A message with no HTML body gets an
+  `PidTagRtfCompressed` body generated from its text. One with HTML does not:
+  Outlook derives a better RTF body from the HTML, and a competing one written
+  here would be the version it displays. The container is the compressed one
+  carrying literal-only tokens -- no compressor, and readable by every
+  decompressor, where the uncompressed container is not: libpff runs its LZ
+  decoder whichever signature it finds.
+* **Message class follows the content type.** Delivery reports and signed mail
+  are classed as such; anything else is `IPM.Note`. Calendar items, contacts and
+  tasks arriving over IMAP are still stored as ordinary mail.
+* **Flags.** `\Seen` becomes `MSGFLAG_READ`, `\Flagged` becomes
+  `PidTagFlagStatus`, `\Draft` becomes `MSGFLAG_UNSENT`, and `\Answered` sets
+  the last verb, which is where the reply arrow in Outlook's message list comes
+  from. Other IMAP keywords become Outlook categories.
+* **Embedded messages are one level of fidelity down.** A `message/rfc822` part
+  is written as a message inside its attachment, with its own recipients and
+  attachments, so Outlook opens it in place. The original source is kept as
+  well, so nothing is lost. Nesting deeper than eight levels stays a plain
+  attachment.
 * **No search folders, no associated (FAI) content.** The associated contents
   table exists on every folder but is always empty.
 * **The name-to-id hash buckets are written on a best guess.** libpff and
