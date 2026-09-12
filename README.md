@@ -183,14 +183,27 @@ output are in [docs/internals.md](docs/internals.md).
 
 ---
 
+## Dependencies
+
+All permissive: nothing here constrains what licence this project may carry.
+
+| Dependency | Licence | Used for |
+|---|---|---|
+| libcurl | MIT-like | IMAP transport |
+| ICU | Unicode licence | Charset conversion |
+| OpenSSL | Apache-2.0 | TLS, via libcurl |
+| zlib | zlib licence | Compression, via libcurl |
+| GoogleTest | BSD-3 | Tests only |
+
+MIME parsing is this project's own code rather than a library, which is what
+keeps that list free of copyleft. See
+[docs/internals.md](docs/internals.md#mime-parsing) for how it is built and
+tested.
+
 ## Licence
 
-**Not yet chosen — and the choice is constrained.** imap2pst links
-[vmime](https://github.com/kisli/vmime), which is GPLv3 with no linking
-exception; its headers state that linking makes a combined work covered by the
-GPL. Any binary distributed from this tree is therefore GPLv3 and must be
-accompanied by the licence text and an offer of source. Adding a `LICENSE` file
-is a prerequisite for publishing a release, and the release workflow refuses to
-run without one.
+**Not yet chosen.** No dependency constrains the choice — pick whatever suits
+you and add a `LICENSE` file. The release workflow refuses to publish without
+one.
 
 [MS-PST]: https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/

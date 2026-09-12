@@ -28,6 +28,39 @@ tests/                     unit tests, fixtures, round-trip writer and script
 cd build && ctest --output-on-failure
 ```
 
+## MIME parsing
+
+MIME is parsed by this project rather than by a library. The reason is
+licensing: the obvious C++ choice, vmime, is GPLv3 with no linking exception, so
+linking it would have decided this project's licence for it. The layers are:
+
+```
+charset.cpp          bytes -> UTF-8, and recovery when the charset lies
+encodings.cpp        base64 and quoted-printable
+headers.cpp          field block, RFC 2047, RFC 2231, addresses
+entity.cpp           the multipart tree
+message_builder.cpp  tree -> the Message the rest of the tool speaks
+mime_parser.cpp      the public entry point, unchanged by any of this
+```
+
+Each layer is tested on its own in `tests/test_mime_core.cpp`, because
+everything above a layer inherits its mistakes and because the inputs that break
+them never appear in well-formed mail.
+
+The switch away from vmime was checked by differential testing rather than by
+inspection: both parsers ran over the same 147 real messages, comparing
+subjects, senders, recipient counts, bodies, attachment counts, names and
+payload sizes. Bodies and attachments were identical; the seven differences were
+all cases where the new parser is better — `From: "Alice Example"` with no
+address, which vmime truncated at the space, and an inline image where vmime
+preferred the content id over the filename. The PSTs built from the two came out
+the same size with the same node and block counts.
+
+That harness is not in the tree, because keeping it would mean keeping a GPL
+build dependency to test with. It is worth rebuilding if the parser is ever
+rewritten again: parse a corpus both ways, compare the normalized `Message`, and
+treat every difference as a question rather than a verdict.
+
 ## Testing
 
 Four groups run, none of which touches the network:

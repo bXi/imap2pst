@@ -37,6 +37,13 @@ bool hasHeader(const std::vector<HeaderField>& fields, const std::string& name);
 // gain spaces.
 std::string decodeEncodedWords(const std::string& text);
 
+// Decodes a header value for display: RFC 2047 encoded words, plus recovery of
+// raw 8-bit bytes.  Headers are supposed to be ASCII with anything else encoded,
+// but plenty of mail simply puts the bytes in, and they are almost always
+// windows-1252.  The recovery happens before decoding, so encoded words -- which
+// are ASCII -- are unaffected by it.
+std::string headerText(const std::string& raw);
+
 // The first token of a structured field: "text/plain" out of
 // "text/plain; charset=utf-8".
 std::string fieldToken(const std::string& value);

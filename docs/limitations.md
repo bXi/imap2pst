@@ -25,6 +25,15 @@ likely you are to hit them:
   are still preserved in `PidTagTransportMessageHeaders`; they just do not also
   get their own addressable property.
 
+**MIME**
+
+* **No TNEF.** A `winmail.dat` from an Exchange sender is carried as an opaque
+  attachment rather than unpacked into the attachments it contains.
+* **No S/MIME or PGP processing.** Signed and encrypted mail is stored as it
+  arrived: the parts are preserved, but nothing is verified or decrypted.
+* **No uuencoded bodies.** The transfer encodings decoded are base64 and
+  quoted-printable; uuencode, which predates MIME, is left as text.
+
 **Fidelity**
 
 * **RTF only for plain-text messages.** A message with no HTML body gets an

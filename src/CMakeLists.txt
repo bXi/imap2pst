@@ -12,14 +12,16 @@ add_library(imap2pst_pst STATIC
 target_include_directories(imap2pst_pst PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 # --- mime --------------------------------------------------------------------
-# The MIME layer is built in pieces -- charsets, transfer encodings, headers,
-# the entity tree -- each testable on its own.  ICU does charset conversion and
-# nothing else; it is the only dependency here.
+# Built in layers, each testable on its own: charset recovery, transfer
+# encodings, header and address parsing, the entity tree, and the mapping to a
+# Message on top.  ICU does charset conversion and nothing else -- it is the
+# only dependency, and it is under the Unicode licence.
 add_library(imap2pst_mime_core STATIC
   mime/charset.cpp
   mime/encodings.cpp
   mime/headers.cpp
   mime/entity.cpp
+  mime/message_builder.cpp
 )
 target_include_directories(imap2pst_mime_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(imap2pst_mime_core PUBLIC imap2pst_pst PRIVATE ICU::uc ICU::i18n)
@@ -27,7 +29,7 @@ target_link_libraries(imap2pst_mime_core PUBLIC imap2pst_pst PRIVATE ICU::uc ICU
 if(IMAP2PST_WITH_MIME)
   add_library(imap2pst_mime STATIC mime/mime_parser.cpp)
   target_include_directories(imap2pst_mime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-  target_link_libraries(imap2pst_mime PUBLIC imap2pst_pst imap2pst_mime_core PRIVATE vmime-static)
+  target_link_libraries(imap2pst_mime PUBLIC imap2pst_pst imap2pst_mime_core)
 endif()
 
 # --- imap --------------------------------------------------------------------

@@ -216,6 +216,11 @@ std::string decodeEncodedWords(const std::string& text) {
     return out;
 }
 
+std::string headerText(const std::string& raw) {
+    const std::string recovered = isValidUtf8(raw) ? raw : windows1252ToUtf8(raw);
+    return decodeEncodedWords(recovered);
+}
+
 std::string fieldToken(const std::string& value) {
     const auto parts = splitOutsideQuotes(value, ';');
     return parts.empty() ? std::string() : trim(parts[0]);
@@ -326,9 +331,23 @@ std::vector<Mailbox> parseAddressList(const std::string& value) {
         const std::size_t close = part.rfind('>');
         if (open != std::string::npos && close != std::string::npos && close > open) {
             mb.email = trim(part.substr(open + 1, close - open - 1));
-            mb.name = decodeEncodedWords(unquote(trim(part.substr(0, open))));
+            mb.name = headerText(unquote(trim(part.substr(0, open))));
         } else {
-            mb.email = trim(part);
+            // No angle brackets.  An address is a bare token -- "root" in
+            // system mail is a real recipient -- but a quoted string, an
+            // encoded word, or anything with spaces is a display name that
+            // arrived without an address, and storing it as one would put a
+            // quoted phrase in the address field.
+            const std::string token = trim(part);
+            const bool looks_like_address =
+                token.find('@') != std::string::npos ||
+                (token.find(' ') == std::string::npos && token.front() != '"' &&
+                 token.compare(0, 2, "=?") != 0);
+            if (looks_like_address) {
+                mb.email = token;
+            } else {
+                mb.name = headerText(unquote(token));
+            }
         }
         // An address that arrived without a domain keeps none.  Completing it
         // would put this machine's host name into someone else's mail.
