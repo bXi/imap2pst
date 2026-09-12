@@ -50,6 +50,18 @@ target_link_libraries(pst_fixture_writer PRIVATE imap2pst_pst)
 add_executable(pst_minimal_writer pst_minimal_writer.cpp)
 target_link_libraries(pst_minimal_writer PRIVATE imap2pst_pst)
 
+# --- scale probe -------------------------------------------------------------
+# The default run is small enough to belong in the suite: it catches throughput
+# decay and per-message memory growth without writing gigabytes.  For the real
+# thing, run the probe by hand -- it has been exercised to a million messages
+# and a 10 GB file:
+#   tests/pst_scale_probe /tmp/big.pst 1000000 200
+add_executable(pst_scale_probe pst_scale_probe.cpp)
+target_link_libraries(pst_scale_probe PRIVATE imap2pst_pst)
+add_test(NAME pst_scale
+         COMMAND pst_scale_probe ${CMAKE_CURRENT_BINARY_DIR}/scale.pst 8000 16)
+set_tests_properties(pst_scale PROPERTIES LABELS scale TIMEOUT 600)
+
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
   set(_roundtrip_pst  ${CMAKE_CURRENT_BINARY_DIR}/roundtrip.pst)

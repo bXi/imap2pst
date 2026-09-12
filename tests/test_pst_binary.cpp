@@ -638,6 +638,41 @@ TEST(PstMessages, PlainTextMessageCarriesAnRtfBody) {
     EXPECT_EQ(without, 1u);
 }
 
+TEST(PstNameIdMap, RunningOutOfNamesDoesNotLoseMessages) {
+    // A mailbox with thousands of distinct header names exhausts the map.  What
+    // must not happen is losing the message: the headers are still in
+    // PidTagTransportMessageHeaders, they just stop getting their own property.
+    TempPst tmp;
+    {
+        PstWriter w(tmp.path());
+        const auto inbox = w.createFolder(w.ipmSubtree(), "Inbox");
+        Message m = makeMessage(1, false);
+        m.headers.clear();
+        for (int i = 0; i < 5000; ++i) {
+            m.headers.push_back({"X-Unique-" + std::to_string(i), "value"});
+        }
+        ASSERT_NO_THROW(w.addMessage(inbox, m));
+        // A second message, to prove the writer keeps going after the cap.
+        Message n = makeMessage(2, false);
+        n.headers.push_back({"X-After-The-Cap", "value"});
+        ASSERT_NO_THROW(w.addMessage(inbox, n));
+        w.finish();
+    }
+
+    const Reader r(readAll(tmp.path()));
+    std::size_t messages = 0;
+    for (const auto& e : r.nodeEntries()) {
+        if (nidType(e.nid) != kNidTypeNormalMessage) continue;
+        ++messages;
+        // Whatever happened to the named properties, the header blob is there.
+        const auto heap = r.blockData(e.data);
+        const auto blob = test::pcProperty(heap, tagId(PR_TRANSPORT_MESSAGE_HEADERS));
+        EXPECT_FALSE(blob.second.empty() && blob.first == 0)
+            << "the headers must survive even when the map is full";
+    }
+    EXPECT_EQ(messages, 2u);
+}
+
 TEST(PstNodes, ReservedNodesArePresent) {
     TempPst tmp;
     writeSample(tmp.path(), 5);

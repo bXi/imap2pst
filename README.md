@@ -206,6 +206,38 @@ present — reads every message back through libpff.
 
 ---
 
+## Scale
+
+The writer has been run to a million messages. Numbers from this machine,
+writing synthetic mail with an attachment every 25th message:
+
+| Messages | Time | Peak RSS | File size |
+|---------:|-----:|---------:|----------:|
+| 25,000   | 1.1s | 9 MB     | 0.24 GB   |
+| 100,000  | 5.2s | 24 MB    | 1.02 GB   |
+| 1,000,000| 53.7s| 262 MB   | 10.27 GB  |
+
+Throughput stays flat at roughly 18,000 messages a second as the B-trees
+deepen -- the million-message file reached NBT depth 4 and BBT depth 5 -- and
+memory is proportional to the message count rather than to the mail, at about
+250 bytes a message. That is the index of what has been written; message
+bodies and attachments are not held past the message they belong to.
+
+The 10 GB file was checked structurally: `ibFileEof` matches the file, both
+B-trees walk cleanly, and blocks sit at offsets well past 4 GB, so the 64-bit
+paths are exercised rather than assumed.
+
+These measure the writer alone. A real migration is bounded by the IMAP server,
+not by this; `--spool` exists so that a second run is not bounded by it twice.
+
+`tests/pst_scale_probe` is the harness. A small run is part of the test suite,
+where it guards against throughput decay and per-message memory growth; the
+large runs are manual:
+
+```sh
+build/tests/pst_scale_probe /tmp/big.pst 1000000 200
+```
+
 ## Known limitations
 
 This milestone favours correctness over completeness. In rough order of how
