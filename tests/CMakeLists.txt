@@ -16,6 +16,11 @@ target_link_libraries(imap2pst_tests PRIVATE
   imap2pst_pst imap2pst_imap_parse imap2pst_test_support GTest::gtest_main)
 gtest_discover_tests(imap2pst_tests)
 
+add_executable(imap2pst_mime_core_tests test_mime_core.cpp)
+target_link_libraries(imap2pst_mime_core_tests PRIVATE
+  imap2pst_mime_core imap2pst_test_support GTest::gtest_main)
+gtest_discover_tests(imap2pst_mime_core_tests)
+
 if(IMAP2PST_WITH_MIME)
   add_executable(imap2pst_mime_tests test_mime.cpp)
   target_link_libraries(imap2pst_mime_tests PRIVATE

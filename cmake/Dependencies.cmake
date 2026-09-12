@@ -8,6 +8,11 @@
 include(FetchContent)
 set(FETCHCONTENT_QUIET OFF)
 
+# -------------------------------------------------------------------- ICU ---
+# Charset conversion, and the only thing ICU is used for.  Distributed under
+# the Unicode licence, which places no condition on what this project may be.
+find_package(ICU REQUIRED COMPONENTS uc i18n)
+
 # ---------------------------------------------------------------- googletest
 if(IMAP2PST_BUILD_TESTS)
   FetchContent_Declare(googletest
