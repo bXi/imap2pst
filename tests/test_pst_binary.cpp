@@ -460,6 +460,44 @@ TEST(PstBTrees, PagesAreAlignedToTheirSize) {
     }
 }
 
+TEST(PstNodes, HmpIndexesUseTheIndirectionLayout) {
+    // The two internal indexes store the HID of their B-tree header in a
+    // four-byte item at the heap's user root, rather than the header itself.
+    // Getting this wrong leaves the file openable but makes the Inbox Repair
+    // Tool fail while walking folders, and no other reader notices.
+    TempPst tmp;
+    writeSample(tmp.path(), 3);
+    const Reader r(readAll(tmp.path()));
+
+    std::size_t checked = 0;
+    for (const auto& e : r.nodeEntries()) {
+        if (e.nid != 0xC01 && e.nid != 0xE01) continue;
+        const auto blocks = r.blocks();
+        auto it = std::find_if(blocks.begin(), blocks.end(),
+                               [&](const test::BlockRef& b) { return b.bid == e.data; });
+        ASSERT_NE(it, blocks.end()) << "node 0x" << std::hex << e.nid << " has no data";
+        const std::uint8_t* p = r.at(it->ib);
+        ASSERT_EQ(p[2], kHnSignature);
+        const Hid user_root = peek32(p + 4);
+        const std::uint16_t ibHnpm = peek16(p);
+        const std::uint16_t alloc_count = peek16(p + ibHnpm);
+        ASSERT_GE(alloc_count, 2) << "expected an indirection plus a B-tree header";
+        // The user root must be the first allocation and hold four bytes.
+        EXPECT_EQ(hidAllocIndex(user_root), 1);
+        const std::uint16_t a = peek16(p + ibHnpm + 4);
+        const std::uint16_t b = peek16(p + ibHnpm + 6);
+        EXPECT_EQ(b - a, 4) << "the user root item must be a single HID";
+        // It must point at a real BTH header.
+        const Hid target = peek32(p + a);
+        const std::uint16_t ti = hidAllocIndex(target);
+        ASSERT_GT(ti, 0);
+        ASSERT_LE(ti, alloc_count);
+        EXPECT_EQ(*(p + peek16(p + ibHnpm + 4 + 2 * (ti - 1))), kHnSigBTH);
+        ++checked;
+    }
+    EXPECT_EQ(checked, 2u) << "both internal indexes should be present";
+}
+
 TEST(PstNodes, ReservedNodesArePresent) {
     TempPst tmp;
     writeSample(tmp.path(), 5);

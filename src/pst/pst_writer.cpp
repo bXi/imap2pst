@@ -529,7 +529,19 @@ void PstWriter::writeReservedNodes() {
     for (const Index& ix : {Index{kNidHmpGuidMap, kHnSigHmpGuid, 16},
                             Index{kNidHmpIdMap, kHnSigHmpId, 4}}) {
         HeapNode hn(ix.client_sig);
-        hn.setUserRoot(buildBth(hn, ix.key_size, 4, {}));
+        // The heap's user root is a four-byte item holding the HID of the
+        // B-tree header, not the header itself.  A store Outlook produced puts
+        // the indirection in the first allocation and the header in the second,
+        // so reserve the slot before building the tree and fill it in after.
+        // Writing the header directly at the user root instead makes the Inbox
+        // Repair Tool fail with 0x800408C1 while walking folders.
+        std::vector<std::uint8_t> indirect(4, 0);
+        const Hid slot = hn.alloc(indirect);
+        const Hid bth = buildBth(hn, ix.key_size, 4, {});
+        indirect.clear();
+        put32(indirect, bth);
+        hn.patch(slot, indirect.data(), indirect.size());
+        hn.setUserRoot(slot);
         SubnodeAllocator subs(ndb_);
         writeNodeFromHeap(ix.nid, 0, hn.serialize(), subs);
     }
