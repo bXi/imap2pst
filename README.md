@@ -223,9 +223,15 @@ memory is proportional to the message count rather than to the mail, at about
 250 bytes a message. That is the index of what has been written; message
 bodies and attachments are not held past the message they belong to.
 
-The 10 GB file was checked structurally: `ibFileEof` matches the file, both
-B-trees walk cleanly, and blocks sit at offsets well past 4 GB, so the 64-bit
-paths are exercised rather than assumed.
+The 10 GB file was checked structurally: `ibFileEof` matches the file, every
+B-tree page passes its CRC, and blocks sit at offsets well past 4 GB, so the
+64-bit paths are exercised rather than assumed. That check is streamed, because
+libpff cannot be used at this size: its open is superlinear in the node count --
+2.5s at 50,000 messages, 17.5s at 100,000, and it had not finished a million
+after fifteen minutes -- so the round-trip oracle covers correctness on small
+files and the probe covers size on large ones.
+
+Outlook opens a 50,000-message, 520 MB store written by this tool.
 
 These measure the writer alone. A real migration is bounded by the IMAP server,
 not by this; `--spool` exists so that a second run is not bounded by it twice.
