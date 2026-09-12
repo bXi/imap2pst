@@ -1,20 +1,148 @@
 # imap2pst
 
-Server-side IMAP → PST migration. Conceptually `imapsync`, except the
-destination is a Microsoft PST file rather than another IMAP server.
+**Migrate an IMAP mailbox into an Outlook PST file, from Linux, with no Outlook
+and no Windows involved.**
 
-It runs headless on Linux. There is no dependency on Outlook, MAPI, Windows or
-any commercial component: the PST is written directly, from the published
-[MS-PST] file format.
+Conceptually [`imapsync`](https://imapsync.lamiral.info/), except the
+destination is a Microsoft PST file rather than another IMAP server. The PST is
+written directly from the published [MS-PST] format, so nothing here needs
+Outlook, MAPI, a Windows machine or a commercial library.
 
-This is the **first milestone**: a complete pipeline — connect, fetch, parse,
-write — that is correct end to end but deliberately narrow. See
-[Known limitations](#known-limitations) before pointing it at anything you care
-about.
+```sh
+imap2pst --host imap.example.com \
+         --user alice@example.com \
+         --password-env IMAP_PASSWORD \
+         --output alice.pst
+```
+
+```
+Listing folders
+Fetching INBOX
+  100/1420 message(s), 84.2 MB fetched, 312/s
+  ...
+Wrote alice.pst: 14 folder(s), 1420 message(s), 96 attachment(s)
+```
+
+Open the result in Outlook with **File → Open & Export → Open Outlook Data
+File**.
 
 ---
 
-## What it does
+## Status
+
+Verified against a real mailbox: Outlook opens the output directly, with no
+repair prompt and no damage report. The writer has been run to a million
+messages and a 10 GB file.
+
+What it preserves: folder hierarchy including nested and non-ASCII folder
+names, plain and HTML bodies, attachments, inline images, embedded (forwarded)
+messages, read and answered state, and IMAP keywords as Outlook categories.
+
+What it does not do yet: calendar items, contacts and tasks arrive as ordinary
+mail; there is no ANSI PST, no encryption, and no space reuse. The full list is
+in **[docs/limitations.md](docs/limitations.md)** — worth reading before a
+migration that matters.
+
+---
+
+## Install
+
+Packages are attached to each [release](../../releases): a `.deb` for Ubuntu
+22.04 and 24.04, an `.rpm` for Fedora, and a portable tarball.
+
+```sh
+sudo apt install ./imap2pst_0.1.0_amd64~ubuntu24.04.deb
+```
+
+### Build from source
+
+Needs a C++17 compiler, CMake 3.20+, and OpenSSL, zlib and ICU development
+headers. libcurl and vmime are fetched and built automatically unless the
+system already has them.
+
+```sh
+sudo apt install build-essential cmake ninja-build libssl-dev zlib1g-dev libicu-dev
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+build/src/imap2pst --help
+```
+
+The first build compiles libcurl and vmime from source and takes a few minutes;
+later builds do not.
+
+| Option | Default | Effect |
+|---|---|---|
+| `IMAP2PST_BUILD_TESTS` | `ON` | Build the test suite |
+| `IMAP2PST_USE_SYSTEM_DEPS` | `OFF` | Link the system libcurl and vmime instead of building them |
+| `IMAP2PST_WITH_IMAP` | `ON` | Build the libcurl IMAP transport |
+| `IMAP2PST_WITH_MIME` | `ON` | Build the vmime MIME parser |
+
+`cpack` in the build directory produces the packages.
+
+---
+
+## Usage
+
+```
+Connection:
+  --host HOST            IMAP server hostname (required)
+  --port N               Port; defaults to 993 with TLS, 143 without
+  --user USER            Login name (required)
+  --password PASS        Password (visible in the process list)
+  --password-env VAR     Read the password from this environment variable
+  --oauth2-bearer TOKEN  XOAUTH2 bearer token instead of a password
+  --no-tls               Plain IMAP, with opportunistic STARTTLS
+  --insecure             Skip server certificate verification
+  --timeout N            Per-request timeout in seconds (default 120)
+  --retries N            Attempts per request before giving up (default 3)
+
+Selection and output:
+  --output FILE.pst      Destination PST (required)
+  --folder NAME          Migrate only this folder; repeat for several
+
+Throughput and restarts:
+  --batch N              Messages per fetch round trip (default 50)
+  --batch-bytes N        Cap on one batch's message source (default 32M)
+  --spool DIR            Keep fetched message source here and reuse it
+  --progress N           Report every N messages (default 100, 0 off)
+  --quiet                Only print the final summary
+  --verbose              Log progress, and libcurl's own protocol trace
+```
+
+Exit status is `0` when everything migrated, `1` when the run finished but some
+messages could not be fetched or parsed — they are listed by folder and UID —
+and `2` for a bad command line.
+
+### Passwords
+
+Use `--password-env`. `--password` puts the secret in the process list where
+any user on the machine can read it.
+
+### Resuming an interrupted run
+
+`--spool DIR` keeps each message's source on disk and reuses it next time, so a
+second run pays only for what the first had not yet downloaded:
+
+```sh
+imap2pst --host imap.example.com --user alice@example.com \
+         --password-env IMAP_PASSWORD \
+         --spool /var/cache/imap2pst --output alice.pst
+```
+
+The PST is always rebuilt from scratch — the restart skips the *download*, it
+does not resume a half-written file. The spool holds the whole mailbox in plain
+text; delete it when the migration is done.
+
+### Large mailboxes
+
+Bodies are fetched in batches rather than one request per message, so the run is
+bounded by the server rather than by round trips. Memory stays proportional to
+the number of messages (about 250 bytes each), not to the size of the mail: a
+million-message mailbox needs roughly 260 MB.
+
+---
+
+## How it works
 
 ```
 IMAP server ──libcurl──▶ raw RFC 822 ──vmime──▶ Message ──▶ Unicode PST
@@ -23,377 +151,46 @@ IMAP server ──libcurl──▶ raw RFC 822 ──vmime──▶ Message ─�
              FLAGS, INTERNALDATE       attachments       attachments
 ```
 
-* **`src/imap/`** — folder listing and message fetching over `imap://` /
-  `imaps://`, using libcurl's native IMAP support. Response *parsing* is split
-  from *transport* (`imap_parse.h` vs `imap_client.h`) so the test suite drives
-  it with recorded fixtures instead of a live mailbox.
-* **`src/mime/`** — vmime turns raw RFC 822 octets into a normalized
-  `Message`: structured headers, plain and HTML bodies, attachments, and a
-  catch-all list of every original header so nothing is silently lost.
-  Everything it emits is UTF-8.
-* **`src/pst/`** — the PST writer, layered the way the spec is: `ndb.*` (blocks,
-  allocation maps, the two B-trees), `heap.*` (heap-on-node, B-tree-on-heap),
-  `ltp.*` (property and table contexts), `nameid_map.*` (named properties), and
-  `pst_writer.*` on top mapping a `Message` to MAPI properties.
+* **`src/imap/`** — folder listing and message fetching over `imap://` and
+  `imaps://`. Parsing is split from transport so tests drive it with recorded
+  responses instead of a live mailbox.
+* **`src/mime/`** — vmime turns raw RFC 822 into a normalized `Message`: headers,
+  bodies, attachments, everything transcoded to UTF-8.
+* **`src/pst/`** — the PST writer, layered as the specification is: blocks and
+  B-trees, heap-on-node, property and table contexts, named properties, and the
+  mapping from `Message` to MAPI properties on top.
 * **`src/pipeline/`** — glue, plus `src/main.cpp` for the CLI.
 
-The PST module depends on neither libcurl nor vmime, so it can be hardened and
-extended on its own.
+The PST module depends on neither libcurl nor vmime, so it can be tested and
+extended on its own. More in **[docs/internals.md](docs/internals.md)**.
 
 ---
 
-## Building
-
-Requirements:
-
-* CMake ≥ 3.20, a C++17 compiler (tested with GCC 13)
-* OpenSSL and zlib development headers (for libcurl's TLS)
-* Network access on the first configure, to fetch dependencies
-
-libcurl, vmime and GoogleTest are pulled in with `FetchContent` and pinned to
-exact revisions in `cmake/Dependencies.cmake`. Nothing is vendored into the
-tree. An already-installed libcurl is used when CMake can find one.
+## Development
 
 ```sh
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
-cmake --build build -j
+cmake -S . -B build -G Ninja
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
 ```
 
-The first build compiles curl and vmime from source and takes a few minutes;
-later builds do not.
+The suite needs no network and no IMAP server. `pip install libpff-python`
+enables the round-trip test, which reads every generated PST back with libpff —
+a reader sharing no code with the writer. Without it that test is skipped.
 
-Useful options:
-
-| Option | Default | Effect |
-| --- | --- | --- |
-| `IMAP2PST_BUILD_TESTS` | `ON` | Build the test suite (needs GoogleTest) |
-| `IMAP2PST_WITH_IMAP` | `ON` | Build the libcurl transport |
-| `IMAP2PST_WITH_MIME` | `ON` | Build the vmime parser |
-
-Turning both `IMAP2PST_WITH_IMAP` and `IMAP2PST_WITH_MIME` off builds just the
-PST writer and its tests, with no third-party dependency except GoogleTest —
-handy when iterating on the format layer.
+Testing approach, the scale probe, and what it took to make Outlook accept the
+output are in [docs/internals.md](docs/internals.md).
 
 ---
 
-## Running it against a real account
+## Licence
 
-```sh
-build/src/imap2pst \
-  --host imap.example.com \
-  --user alice@example.com \
-  --password-env IMAP_PASSWORD \
-  --output alice.pst \
-  --verbose
-```
+**Not yet chosen — and the choice is constrained.** imap2pst links
+[vmime](https://github.com/kisli/vmime), which is GPLv3 with no linking
+exception; its headers state that linking makes a combined work covered by the
+GPL. Any binary distributed from this tree is therefore GPLv3 and must be
+accompanied by the licence text and an offer of source. Adding a `LICENSE` file
+is a prerequisite for publishing a release, and the release workflow refuses to
+run without one.
 
-`--password-env` names an environment variable rather than putting the secret
-in the command line, where it would be visible in `ps` and shell history.
-`--password` exists for scripted use but prefer the former.
-
-Options:
-
-```
---host HOST            IMAP server hostname (required)
---port N               Port; defaults to 993 with TLS, 143 without
---user USER            Login name (required)
---password PASS        Password (visible in the process list; prefer --password-env)
---password-env VAR     Read the password from environment variable VAR
---oauth2-bearer TOKEN  XOAUTH2 bearer token instead of a password
---no-tls               Plain IMAP, with opportunistic STARTTLS
---insecure             Skip server certificate verification
---timeout N            Per-request timeout in seconds (default 120)
---retries N            Attempts per request before giving up (default 3)
---output FILE.pst      Destination PST (required)
---folder NAME          Migrate only this folder; repeat for several
---batch N              Messages per fetch round trip (default 50)
---batch-bytes N        Cap on one batch's message source (default 32M)
---spool DIR            Keep fetched message source here and reuse it
---progress N           Report every N messages (default 100, 0 off)
---quiet                Only print the final summary
---verbose              Log progress, and libcurl's own protocol trace
-```
-
-Bodies are fetched a batch at a time -- one `UID FETCH` naming up to `--batch`
-messages, rather than one request each. The batch is held in memory while it is
-parsed, so `--batch-bytes` closes it early when the messages it names turn out
-to be large; a folder of 50 MB attachments does not become a 50 MB batch.
-
-`--spool DIR` keeps each message's source on disk and reuses it on a later run,
-which is what makes an interrupted migration cheap to restart: the second run
-pays only for what the first had not yet downloaded. The PST is always rebuilt
-from scratch, so the restart is not resuming a half-written file -- it is
-skipping the download. The spool is plain RFC 822 source, one file per message,
-and can be deleted at any time.
-
-Folder hierarchy is preserved. The server's `LIST` delimiter is used to split
-names, so `INBOX.Work.2024` on a Courier-style server becomes
-`Inbox → Work → 2024` inside the PST, under `Top of Personal Folders`.
-
-Exit status is `0` on success, `1` if some messages could not be fetched (the
-PST is still written with the rest), `2` on a usage error.
-
----
-
-## Testing
-
-```sh
-cd build && ctest --output-on-failure
-```
-
-Four groups run, none of which touches the network:
-
-**Unit tests.** IMAP response parsing is driven by recorded fixtures in
-`tests/fixtures/*.txt`; MIME normalization by `.eml` fixtures covering plain
-text, multipart with attachments, HTML-only, ISO-8859-1, and UTF-8 with RFC 2047
-encoded headers.
-
-**Client and pipeline tests.** `ImapTransport` is an interface, so
-`test_imap_client.cpp` and `test_pipeline.cpp` replace it with a fake that
-replays fixture responses. The pipeline test runs the whole chain — recorded
-IMAP traffic through vmime into a PST — and re-reads the result, so folder
-hierarchy, message counts and the folder filter are covered without a mailbox.
-
-**PST binary structure.** `tests/test_pst_binary.cpp` writes PSTs and re-reads
-them with a small parser written straight from the spec — not shared with the
-writer — asserting the header magic and CRCs, page and block trailers and
-signatures, B-tree ordering and depth, that no block overlaps a reserved AMap
-or PMap page, and that the allocation map marks every block that exists.
-
-**Round-trip against libpff.** `tests/pst_fixture_writer.cpp` writes a PST plus
-a JSON manifest of exactly what went in; `tests/scripts/verify_pst.py` reads the
-PST back through `pypff` and checks folder names, subjects, bodies, attachment
-bytes and the named-property map against that manifest. libpff shares no code
-with this project, so it is a genuine oracle rather than a mirror.
-
-### Test-only prerequisite: pypff
-
-The round-trip test needs `pypff`, the Python binding for libpff. It is **not**
-a build dependency and nothing links against it — CMake only needs a Python 3
-interpreter to invoke the script.
-
-```sh
-python3 -m venv .venv
-.venv/bin/pip install libpff-python
-cmake -S . -B build -DPython3_EXECUTABLE=$PWD/.venv/bin/python
-```
-
-`-DPython3_EXECUTABLE` is only needed when the interpreter holding `pypff` is
-not the default `python3`.
-
-When `pypff` is missing the script exits `77` and CTest reports the test as
-**skipped**, not failed, so the rest of the suite still runs. Distribution
-packages (`python3-libpff`) work equally well, as does shelling out to
-`pffexport` by hand for a spot check.
-
-### Opt-in live server test
-
-There is one test that does need a real account. It is off by default and never
-runs in CI:
-
-```sh
-cmake -S . -B build -DIMAP2PST_LIVE_TEST=ON
-cmake --build build -j
-IMAP2PST_HOST=imap.example.com \
-IMAP2PST_USER=alice@example.com \
-IMAP2PST_PASSWORD='...' \
-IMAP2PST_FOLDER=INBOX \
-ctest --test-dir build -R imap_live_migration --output-on-failure
-```
-
-It migrates one folder, asserts a non-empty PST came out, and — when `pypff` is
-present — reads every message back through libpff.
-
----
-
-## Scale
-
-The writer has been run to a million messages. Numbers from this machine,
-writing synthetic mail with an attachment every 25th message:
-
-| Messages | Time | Peak RSS | File size |
-|---------:|-----:|---------:|----------:|
-| 25,000   | 1.1s | 9 MB     | 0.24 GB   |
-| 100,000  | 5.2s | 24 MB    | 1.02 GB   |
-| 1,000,000| 53.7s| 262 MB   | 10.27 GB  |
-
-Throughput stays flat at roughly 18,000 messages a second as the B-trees
-deepen -- the million-message file reached NBT depth 4 and BBT depth 5 -- and
-memory is proportional to the message count rather than to the mail, at about
-250 bytes a message. That is the index of what has been written; message
-bodies and attachments are not held past the message they belong to.
-
-The 10 GB file was checked structurally: `ibFileEof` matches the file, every
-B-tree page passes its CRC, and blocks sit at offsets well past 4 GB, so the
-64-bit paths are exercised rather than assumed. That check is streamed, because
-libpff cannot be used at this size: its open is superlinear in the node count --
-2.5s at 50,000 messages, 17.5s at 100,000, and it had not finished a million
-after fifteen minutes -- so the round-trip oracle covers correctness on small
-files and the probe covers size on large ones.
-
-Outlook opens a 50,000-message, 520 MB store written by this tool.
-
-These measure the writer alone. A real migration is bounded by the IMAP server,
-not by this; `--spool` exists so that a second run is not bounded by it twice.
-
-`tests/pst_scale_probe` is the harness. A small run is part of the test suite,
-where it guards against throughput decay and per-message memory growth; the
-large runs are manual:
-
-```sh
-build/tests/pst_scale_probe /tmp/big.pst 1000000 200
-```
-
-## Known limitations
-
-This milestone favours correctness over completeness. In rough order of how
-likely you are to hit them:
-
-**Format scope**
-
-* **Unicode PST only.** The ANSI/32-bit layout is not written and not read.
-* **No encryption.** Files are written with `NDB_CRYPT_NONE`. The permute and
-  cyclic encodings are not implemented.
-* **Append-only allocation.** Space is handed out by a bump allocator that steps
-  over the reserved pages. Nothing is ever freed or reused, and there is no
-  compaction, so rewriting is not possible and the file is larger than an
-  Outlook-written equivalent.
-* **No FMap/FPMap pages.** They are marked absent in the header, which
-  [MS-PST] permits for Unicode files. A PMap page is written per span and marked
-  fully allocated.
-* **Two levels of data tree.** XBLOCK and XXBLOCK are both implemented, which
-  caps a single property value at roughly 8 GB — far past anything that matters,
-  but it is a cap, not an arbitrary limit.
-* **Named properties cap at 4096** distinct names per file. Beyond that, headers
-  are still preserved in `PidTagTransportMessageHeaders`; they just do not also
-  get their own addressable property.
-
-**Fidelity**
-
-* **RTF only for plain-text messages.** A message with no HTML body gets an
-  `PidTagRtfCompressed` body generated from its text. One with HTML does not:
-  Outlook derives a better RTF body from the HTML, and a competing one written
-  here would be the version it displays. The stream is written **uncompressed**,
-  which is the only form Outlook renders: every compressed variant tried --
-  the format's own weak CRC, a standard CRC-32, a trailing end-of-stream token,
-  a different codepage -- produced `<<Error: data corruption>>` in place of the
-  body. libpff is the opposite, and cannot read the uncompressed form at all,
-  because it runs its LZ decoder whichever signature it finds. There is no form
-  both accept, so Outlook wins: a body a person cannot read is the failure that
-  matters, and libpff still has `PidTagBody`.
-* **Message class follows the content type.** Delivery reports and signed mail
-  are classed as such; anything else is `IPM.Note`. Calendar items, contacts and
-  tasks arriving over IMAP are still stored as ordinary mail.
-* **Flags.** `\Seen` becomes `MSGFLAG_READ`, `\Flagged` becomes
-  `PidTagFlagStatus`, `\Draft` becomes `MSGFLAG_UNSENT`, and `\Answered` sets
-  the last verb, which is where the reply arrow in Outlook's message list comes
-  from. Other IMAP keywords become Outlook categories.
-* **Embedded messages are one level of fidelity down.** A `message/rfc822` part
-  is written as a message inside its attachment, with its own recipients and
-  attachments, so Outlook opens it in place. The original source is kept as
-  well, so nothing is lost. Nesting deeper than eight levels stays a plain
-  attachment.
-* **No search folders, no associated (FAI) content.** The associated contents
-  table exists on every folder but is always empty.
-* **The name-to-id hash buckets are written on a best guess.** libpff and
-  java-libpst both resolve named properties from the entry stream and ignore the
-  buckets, so a disagreement with Outlook's exact hash would not show up in the
-  test suite. See the comment at the top of `src/pst/nameid_map.h`.
-* **Every message gets an attachment table**, even with no attachments. It costs
-  one small node per message and keeps libpff's subnode lookup on its happy
-  path; see the comment in `PstWriter::addMessage`.
-
-**Outlook**
-
-Verified against a real mailbox: 13 folders and 147 messages migrated from an
-IMAP server open directly in Outlook (build 16.0.10417.20207) -- no repair pass,
-no damage report -- with folder hierarchy, nested folders, message bodies,
-attachments, and non-ASCII subjects, sender names and folder names intact.
-
-Two of the fixes are worth knowing about before touching this code. The first is
-in the LTP layer: **string-named properties are matched without regard to case**,
-so `Content-Type` and `Content-type` are one property and must share one id.
-Minting an id per spelling leaves Outlook holding two map entries for a single
-name; it opens the store but reports it as damaged, and the Inbox Repair Tool
-dereferences the entry it could not resolve and crashes. Header spelling varies
-freely in real mail -- one `Content-type` among 147 messages was enough.
-
-That one is a lesson in what a bisect can and cannot tell you. The failure
-tracked nothing about the message that triggered it: not its content, not its
-folder, not file size, not B-tree depth. Halving the mailbox produced two halves
-that both passed. What identified it was counting name-to-id entries across every
-file already judged: every good one had 89 or fewer, every bad one exactly 90.
-A property of the whole store, invisible in any single message, so no amount of
-narrowing down to "the 68th message" was going to name it.
-
-The second is in the NDB layer: **a page's absolute file offset must be a multiple
-of 512**. Blocks are allocated in 64-byte units, so a page written straight
-after one lands misaligned unless the cursor is advanced first. Outlook
-fail-fasts out of `mspst32.dll` with HRESULT `0x80040813` and the internal
-message "Page has misaligned or zero ib". Nothing else detects it: libpff reads
-such a file perfectly, the repair tool rebuilds both B-trees rather than
-reporting the offset, and the page contents are entirely valid -- only their
-position is wrong, which no structural comparison looks at.
-
-That defect is also a lesson in how it presents. Whether a page happened to land
-aligned depended on how many blocks preceded it, so the failure tracked folder
-count and placement while following no rule that made sense: one folder under an
-empty parent worked, two did not; a subtree with three children worked, two or
-four did not. Hours went into hypotheses about child counts and hierarchy
-tables. The answer came from attaching a debugger, breaking on the exception,
-and reading the format string beside the error code -- worth doing early once a
-failure proves deterministic.
-
-Two further cautions. The repair tool's complaints are advisory -- it repairs the
-file regardless -- and acting on them twice broke a configuration that
-previously opened. And a PST that Outlook has opened is no longer the file that
-was written, because it adds its own search folders on first open; diffing one of
-those measures the wrong thing.
-
-Not written, and not required for Outlook to open a store cleanly: the search
-folders and their update queues, and node `0xEE1`, a flat list with one record
-per object that Outlook builds for itself. Writing `0xEE1` in Outlook's exact
-format stops even a bare store from opening, so its payload carries meaning this
-writer does not understand -- see the comment in
-`PstWriter::writeReservedNodes`.
-
-**Transport**
-
-* **Plain `LOGIN` is the tested path.** `--oauth2-bearer` wires up libcurl's
-  XOAUTH2 support but has not been exercised against a real provider.
-* **One message per request.** Bodies are fetched with an individual
-  `UID FETCH` per message rather than pipelined, so large mailboxes are slower
-  than they need to be.
-* **No resume.** An interrupted run leaves a partial PST that must be discarded.
-
----
-
-## Layout
-
-```
-cmake/Dependencies.cmake   pinned FetchContent declarations
-src/core/                  the normalized Message every module speaks
-src/imap/                  imap_parse.*  response parsers (no I/O)
-                           imap_client.* libcurl transport + folder walking
-src/mime/                  vmime-backed normalization
-src/pst/                   pst_format.h  on-disk constants and helpers
-                           crc.*         the [MS-PST] weak CRC-32
-                           ndb.*         blocks, allocation maps, NBT/BBT
-                           heap.*        heap-on-node, B-tree-on-heap
-                           ltp.*         property and table contexts
-                           nameid_map.*  named properties, node 0x61
-                           prop_tags.h   the MAPI tags this writer emits
-                           pst_writer.*  Message -> folders and messages
-src/pipeline/              IMAP -> MIME -> PST
-tests/                     unit tests, fixtures, round-trip writer and script
-```
-
-## References
-
-* [MS-PST], *Outlook Personal Folders (.pst) File Format* — the primary
-  reference for everything under `src/pst/`.
-* [java-libpst](https://github.com/rjohnsondev/java-libpst) — used as a second
-  opinion where the spec is ambiguous, particularly around the NDB allocation
-  maps and the heap-on-node and property-context layers.
-* [libpff](https://github.com/libyal/libpff) — read-only, used as the test
-  oracle.
+[MS-PST]: https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/
