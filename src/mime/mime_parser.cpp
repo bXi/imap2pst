@@ -6,6 +6,7 @@
 
 #include <vmime/vmime.hpp>
 #include <vmime/contentTypeField.hpp>
+#include <vmime/platforms/posix/posixHandler.hpp>
 
 namespace imap2pst::mime {
 namespace {
@@ -13,6 +14,26 @@ namespace {
 // A forwarded message that itself forwards a message is ordinary; a chain
 // deeper than this is not worth the stack or the file size.
 constexpr int kMaxEmbeddedDepth = 8;
+
+// vmime completes an address with no domain -- "To: root" -- by appending the
+// local machine's host name, which would write the name of whatever server ran
+// the migration into the customer's mail.  The handler below gives it a fixed,
+// reserved domain (RFC 2606) instead, and convertMailbox strips it again, so an
+// address that arrived without a domain leaves without one.
+const char* const kSyntheticDomain = "invalid";
+
+class NeutralHostHandler : public vmime::platforms::posix::posixHandler {
+ public:
+    const vmime::string getHostName() const override { return kSyntheticDomain; }
+};
+
+void installNeutralHost() {
+    static bool done = [] {
+        vmime::platform::setHandler<NeutralHostHandler>();
+        return true;
+    }();
+    (void)done;
+}
 
 const vmime::charset& utf8() {
     static const vmime::charset cs("utf-8");
@@ -104,6 +125,12 @@ Mailbox convertMailbox(const vmime::mailbox& mb) {
     Mailbox out;
     out.name = textToUtf8(mb.getName());
     out.email = mb.getEmail().toString();
+    // Undo the domain vmime bolts onto an address that arrived without one.
+    const std::string suffix = std::string("@") + kSyntheticDomain;
+    if (out.email.size() > suffix.size() &&
+        out.email.compare(out.email.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        out.email.erase(out.email.size() - suffix.size());
+    }
     if (out.name == out.email) out.name.clear();
     return out;
 }
@@ -152,20 +179,52 @@ std::string stripAngles(std::string s) {
 // Every header of the top-level part, in wire order.  Values are decoded to
 // UTF-8 where vmime parsed them as encoded text and generated verbatim
 // otherwise, so nothing is lost.
-std::vector<RawHeader> collectHeaders(const vmime::header& hdr) {
+// Header values come from the source text rather than from vmime's regenerated
+// form.  Regenerating rewrites what it parsed -- an address with no domain comes
+// back with one bolted on -- and these are meant to be what arrived.  Only
+// RFC 2047 encoded words are decoded, which changes no structure.
+std::vector<RawHeader> collectHeaders(const std::string& raw) {
     std::vector<RawHeader> out;
-    for (const auto& field : hdr.getFieldList()) {
-        RawHeader h;
-        h.name = field->getName();
-        const auto value = field->getValue();
-        if (!value) continue;
-        if (const auto t = vmime::dynamicCast<const vmime::text>(value)) {
-            h.value = textToUtf8(*t);
-        } else {
-            h.value = value->generate();
+    std::size_t i = 0;
+    std::string name, value;
+    auto flush = [&]() {
+        if (name.empty()) return;
+        std::string decoded = value;
+        try {
+            if (decoded.find("=?") != std::string::npos) {
+                const auto text = vmime::text::decodeAndUnfold(decoded);
+                if (text) decoded = textToUtf8(*text);
+            }
+        } catch (const vmime::exception&) {
+            // Keep the raw value: a header that will not decode is still data.
         }
-        out.push_back(std::move(h));
+        out.push_back({name, decoded});
+        name.clear();
+        value.clear();
+    };
+    while (i < raw.size()) {
+        std::size_t eol = raw.find('\n', i);
+        if (eol == std::string::npos) eol = raw.size();
+        std::string line = raw.substr(i, eol - i);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        i = eol + 1;
+        if (line.empty()) break;                 // end of the header block
+        if (line[0] == ' ' || line[0] == '\t') {  // folded continuation
+            const std::size_t at = line.find_first_not_of(" \t");
+            if (!name.empty() && at != std::string::npos) {
+                value += ' ';
+                value += line.substr(at);
+            }
+            continue;
+        }
+        const std::size_t colon = line.find(':');
+        if (colon == std::string::npos) continue;
+        flush();
+        name = line.substr(0, colon);
+        const std::size_t at = line.find_first_not_of(" \t", colon + 1);
+        value = at == std::string::npos ? std::string() : line.substr(at);
     }
+    flush();
     return out;
 }
 
@@ -257,6 +316,31 @@ Message parseAtDepth(const std::string& raw, int depth);
 // attachment.  `depth` stops a message that forwards itself -- or a deliberately
 // nested one -- from recursing without bound; past the limit the part stays an
 // ordinary attachment, which is lossless, just less convenient to read.
+// Mail delivered by BCC carries no To, Cc or Bcc header, so a parse of the
+// visible headers finds no recipient at all and the message reaches Outlook
+// addressed to nobody.  The delivery headers still name who received it.  It
+// goes in as a BCC recipient, which is what it was: recording it as To would
+// claim a header the message never had.
+void recoverHiddenRecipients(Message* out) {
+    if (!out->to.empty() || !out->cc.empty() || !out->bcc.empty()) return;
+    // In preference order: the one the delivering agent wrote last is the one
+    // that named this mailbox.
+    static const char* kDeliveryHeaders[] = {"delivered-to", "x-original-to", "envelope-to"};
+    for (const char* wanted : kDeliveryHeaders) {
+        for (const auto& h : out->headers) {
+            if (lower(h.name) != wanted) continue;
+            std::string address = h.value;
+            const std::size_t start = address.find_first_not_of(" \t<");
+            const std::size_t end = address.find_last_not_of(" \t>\r\n");
+            if (start == std::string::npos) continue;
+            address = address.substr(start, end - start + 1);
+            if (address.empty() || address.find('@') == std::string::npos) continue;
+            out->bcc.push_back({std::string(), address});
+            return;
+        }
+    }
+}
+
 void parseEmbeddedMessages(Message* out, int depth) {
     if (depth >= kMaxEmbeddedDepth) return;
     for (auto& a : out->attachments) {
@@ -349,6 +433,7 @@ Message fallbackParse(const std::string& raw) {
 }
 
 Message parseAtDepth(const std::string& raw, int depth) {
+    installNeutralHost();
     Message out;
     try {
         auto msg = vmime::make_shared<vmime::message>();
@@ -363,7 +448,7 @@ Message parseAtDepth(const std::string& raw, int depth) {
         out.date = toUnix(mp.getDate());
 
         if (const auto hdr = msg->getHeader()) {
-            out.headers = collectHeaders(*hdr);
+            out.headers = collectHeaders(raw);
             if (hdr->hasField(vmime::fields::MESSAGE_ID)) {
                 out.message_id = stripAngles(
                     hdr->findField(vmime::fields::MESSAGE_ID)->getValue()->generate());
@@ -385,6 +470,8 @@ Message parseAtDepth(const std::string& raw, int depth) {
         if (const auto hdr = msg->getHeader()) {
             out.message_class = messageClassFor(*hdr);
         }
+
+        recoverHiddenRecipients(&out);
 
         collectTextParts(mp, &out);
         collectAttachments(mp, &out);

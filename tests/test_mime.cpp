@@ -233,5 +233,88 @@ TEST(Mime, MessageClassFollowsTheContentType) {
     EXPECT_EQ(parse(signed_mail).message_class, "IPM.Note.SMIME.MultipartSigned");
 }
 
+TEST(Mime, BccDeliveryIsRecoveredFromDeliveryHeaders) {
+    // Mail delivered by BCC has no To, Cc or Bcc header at all.  Without this
+    // the message reaches Outlook addressed to nobody, though the delivery
+    // headers say exactly who received it.
+    const std::string bcc_mail =
+        "Return-Path: <cron@server.example>\r\n"
+        "Delivered-To: info@example.com\r\n"
+        "Received: from server.example\r\n"
+        "From: Cron Daemon <cron@server.example>\r\n"
+        "Subject: nightly run\r\n"
+        "\r\n"
+        "all done\r\n";
+    const Message m = parse(bcc_mail);
+    EXPECT_TRUE(m.to.empty());
+    EXPECT_TRUE(m.cc.empty());
+    ASSERT_EQ(m.bcc.size(), 1u) << "the delivery address is the recipient";
+    EXPECT_EQ(m.bcc[0].email, "info@example.com");
+
+    // A visible recipient wins: the delivery headers are a fallback, not an
+    // addition, or every message would gain a duplicate recipient.
+    const std::string ordinary =
+        "Delivered-To: info@example.com\r\n"
+        "From: alice@example.com\r\n"
+        "To: Bob <bob@example.net>\r\n"
+        "Subject: hello\r\n"
+        "\r\nhi\r\n";
+    const Message n = parse(ordinary);
+    ASSERT_EQ(n.to.size(), 1u);
+    EXPECT_EQ(n.to[0].email, "bob@example.net");
+    EXPECT_TRUE(n.bcc.empty());
+
+    // A delivery header that is not an address is ignored rather than turned
+    // into a recipient with a nonsense name.
+    const Message junk = parse(
+        "Delivered-To: unknown\r\nFrom: a@b.example\r\nSubject: x\r\n\r\ny\r\n");
+    EXPECT_TRUE(junk.bcc.empty());
+}
+
+TEST(Mime, NoLocalHostNameLeaksIntoAddressesOrHeaders) {
+    // An address with no domain -- "To: root", ordinary in system mail -- gets
+    // completed by vmime with the local machine's host name.  That would write
+    // the name of whatever server ran the migration into the customer's mail,
+    // in both the recipient list and the stored headers.
+    const std::string system_mail =
+        "From: root\r\n"
+        "To: root\r\n"
+        "Subject: Cron <root@server> /usr/bin/backup\r\n"
+        "\r\n"
+        "done\r\n";
+    const Message m = parse(system_mail);
+
+    EXPECT_EQ(m.from.email, "root") << "a bare address keeps no domain";
+    ASSERT_EQ(m.to.size(), 1u);
+    EXPECT_EQ(m.to[0].email, "root");
+
+    // The stored headers are what arrived, not what a parser would regenerate.
+    for (const auto& h : m.headers) {
+        if (h.name != "To" && h.name != "From") continue;
+        EXPECT_EQ(h.value, "root") << h.name << " was rewritten";
+    }
+    const std::string blob = m.header_blob();
+    EXPECT_NE(blob.find("To: root\r\n"), std::string::npos)
+        << "the header block must be verbatim, got: " << blob;
+}
+
+TEST(Mime, FoldedHeadersAreUnfoldedAndEncodedWordsDecoded) {
+    const std::string mail =
+        "Subject: =?utf-8?B?w5xiZXJzaWNodA==?=\r\n"
+        "X-Long: first part\r\n"
+        "\tsecond part\r\n"
+        "From: a@b.example\r\n"
+        "\r\nbody\r\n";
+    const Message m = parse(mail);
+    EXPECT_EQ(m.subject, "\xC3\x9C" "bersicht");
+    bool seen = false;
+    for (const auto& h : m.headers) {
+        if (h.name != "X-Long") continue;
+        seen = true;
+        EXPECT_EQ(h.value, "first part second part");
+    }
+    EXPECT_TRUE(seen) << "the folded header must survive";
+}
+
 }  // namespace
 }  // namespace imap2pst::mime
