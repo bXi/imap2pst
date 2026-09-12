@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and test (${{ matrix.compiler }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build libssl-dev zlib1g-dev libicu-dev
+
+      # vmime and libcurl are built from source, which dominates a cold build.
+      # The key covers the pinned revisions, so the cache is only rebuilt when a
+      # dependency actually moves.
+      - name: Cache dependency builds
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-${{ runner.os }}-${{ matrix.compiler }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+
+      - name: Install pypff
+        # The round-trip oracle reads the PST back with a library that shares no
+        # code with the writer.  Without it those tests report as skipped rather
+        # than failing, so install it explicitly and fail loudly if it breaks.
+        # --break-system-packages because the runner's python is marked
+        # externally managed (PEP 668) and pip otherwise refuses.
+        run: pip install --user --break-system-packages libpff-python
+
+      - name: Configure
+        run: |
+          CC=${{ matrix.compiler == 'gcc' && 'gcc' || 'clang' }} \
+          CXX=${{ matrix.compiler == 'gcc' && 'g++' || 'clang++' }} \
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Check the round-trip oracle actually ran
+        # A skipped oracle looks like a pass.  This turns "pypff was missing"
+        # into a failure, because the whole point of that test is the
+        # independent reader.
+        run: |
+          if ctest --test-dir build -R pst_roundtrip_verify_libpff -N | grep -q "Total Tests: 0"; then
+            echo "the libpff round-trip test is not registered"; exit 1
+          fi
+          # -V, not --output-on-failure: a passing test prints nothing under the
+          # latter, and what needs checking here is what the oracle said.
+          ctest --test-dir build -R pst_roundtrip_verify_libpff -V | tee result.txt
+          grep -q "verified" result.txt || { echo "the oracle did not verify anything"; exit 1; }
+
+  scale:
+    name: Scale probe
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build libssl-dev zlib1g-dev libicu-dev
+      - name: Cache dependency builds
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-${{ runner.os }}-gcc-${{ hashFiles('cmake/Dependencies.cmake') }}
+      - name: Configure and build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel --target pst_scale_probe
+      # Larger than the suite's own run, small enough for a hosted runner's
+      # disk.  Catches throughput decay and per-message memory growth, which
+      # only appear with the B-trees several levels deep.
+      - name: Probe 200,000 messages
+        run: build/tests/pst_scale_probe "${RUNNER_TEMP}/scale.pst" 200000 100
+
+  package:
+    name: Package build (no publish)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build libssl-dev zlib1g-dev libicu-dev
+      - name: Cache dependency builds
+        uses: actions/cache@v4
+        with:
+          path: build-pkg/_deps
+          key: deps-pkg-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+      - name: Build packages
+        run: |
+          cmake -S . -B build-pkg -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DIMAP2PST_BUILD_TESTS=OFF
+          cmake --build build-pkg --parallel
+          cd build-pkg && cpack -G "DEB;TGZ"
+      # A package that ships its dependencies' headers is a packaging bug that
+      # nothing else catches: it builds, installs and runs.
+      - name: Check the package holds only what it should
+        run: |
+          contents=$(dpkg-deb -c build-pkg/*.deb | awk '{print $6}')
+          echo "$contents"
+          for unexpected in usr/include usr/lib curl-config mk-ca-bundle; do
+            if echo "$contents" | grep -q "$unexpected"; then
+              echo "package contains $unexpected, which belongs to a dependency"
+              exit 1
+            fi
+          done
+          echo "$contents" | grep -q "./usr/bin/imap2pst" || { echo "no binary"; exit 1; }
+      - name: Run the packaged binary
+        run: |
+          dpkg-deb -x build-pkg/*.deb "${RUNNER_TEMP}/pkg"
+          "${RUNNER_TEMP}/pkg/usr/bin/imap2pst" --help

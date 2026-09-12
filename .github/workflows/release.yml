@@ -1,0 +1,156 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build the packages but publish nothing'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write   # needed to create the release and upload to it
+
+jobs:
+  # Distributing a binary that links vmime carries GPL obligations.  Checking
+  # before anything is built means a release cannot be published without the
+  # licence text the binary's own dependencies require.
+  licence-check:
+    name: Licence present
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require a LICENSE file
+        run: |
+          if [ ! -f LICENSE ]; then
+            cat <<'MSG'
+          No LICENSE file in the repository.
+
+          imap2pst links vmime, which is GPLv3 with no linking exception: its
+          own headers state that linking makes a combined work covered by the
+          GPL.  A binary released from this tree is therefore GPLv3, and must
+          be accompanied by the licence text and an offer of source.
+
+          Add a LICENSE file, or replace the MIME parser, before releasing.
+          MSG
+            exit 1
+          fi
+
+  deb:
+    name: .deb (${{ matrix.runner }})
+    needs: licence-check
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Two builds because a .deb built against a newer glibc will not install
+        # on an older release; the 22.04 package covers the older systems.
+        runner: [ubuntu-22.04, ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build libssl-dev zlib1g-dev libicu-dev
+      - name: Build packages
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DIMAP2PST_BUILD_TESTS=OFF
+          cmake --build build --parallel
+          cd build && cpack -G "DEB;TGZ"
+      - name: Name the artefacts after the distribution they were built on
+        run: |
+          source /etc/os-release
+          mkdir -p out
+          for f in build/*.deb; do
+            mv "$f" "out/$(basename "${f%.deb}")~${ID}${VERSION_ID}.deb"
+          done
+          for f in build/*.tar.gz; do
+            mv "$f" "out/$(basename "${f%.tar.gz}")~${ID}${VERSION_ID}.tar.gz"
+          done
+          ls -la out
+      - name: Verify the package installs and runs
+        run: |
+          sudo apt-get install -y ./out/*.deb
+          imap2pst --help
+          man -w imap2pst
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.runner }}
+          path: out/*
+
+  rpm:
+    name: .rpm (Fedora)
+    needs: licence-check
+    runs-on: ubuntu-24.04
+    container: fedora:40
+    steps:
+      - name: Install build dependencies
+        run: |
+          dnf -y install gcc-c++ cmake ninja-build git rpm-build \
+            openssl-devel zlib-devel libicu-devel
+      - uses: actions/checkout@v4
+      - name: Build packages
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DIMAP2PST_BUILD_TESTS=OFF
+          cmake --build build --parallel
+          cd build && cpack -G RPM
+      - name: Verify the package installs and runs
+        run: |
+          dnf -y install ./build/*.rpm
+          imap2pst --help
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-fedora
+          path: build/*.rpm
+
+  source-tarball:
+    name: Source tarball
+    needs: licence-check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build libssl-dev \
+            zlib1g-dev libicu-dev
+      # The GPL obliges anyone distributing the binary to offer the source it
+      # was built from, so the source tarball is part of the release rather than
+      # an afterthought.
+      - name: Build the source package
+        run: |
+          cmake -S . -B build -G Ninja -DIMAP2PST_BUILD_TESTS=OFF
+          cd build && cpack --config CPackSourceConfig.cmake
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-source
+          path: build/*-Source.tar.gz
+
+  publish:
+    name: Publish release
+    needs: [deb, rpm, source-tarball]
+    if: startsWith(github.ref, 'refs/tags/') && !inputs.dry_run
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: List what is about to be published
+        run: ls -la artifacts
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" artifacts/* \
+            --title "imap2pst ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --verify-tag
