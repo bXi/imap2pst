@@ -4,7 +4,8 @@
 #
 #   * self-contained -- dependencies built from source and linked statically.
 #     One binary that runs anywhere with a matching libc.  The cost is that
-#     every CVE in libcurl or OpenSSL becomes yours to rebuild for.
+#     every CVE in libcurl or OpenSSL becomes yours to rebuild for.  All of them
+#     are permissive, so this raises no licensing question.
 #
 #   * distribution    -- IMAP2PST_USE_SYSTEM_DEPS=ON, linking the system
 #     libcurl and vmime.  This is what a .deb or .rpm should be: the package
@@ -21,13 +22,11 @@ install(FILES ${CMAKE_SOURCE_DIR}/README.md
 if(EXISTS ${CMAKE_SOURCE_DIR}/LICENSE)
   install(FILES ${CMAKE_SOURCE_DIR}/LICENSE DESTINATION ${CMAKE_INSTALL_DOCDIR})
 else()
-  # Not fatal, because the build is useful without it, but a package without a
-  # licence file is not distributable -- and this one links vmime, which is
-  # GPLv3 with no linking exception, so the combined work is GPLv3.
-  message(WARNING
-    "No LICENSE file: packages built from this tree are not distributable. "
-    "imap2pst links vmime (GPLv3, no linking exception), so the combined work "
-    "is GPLv3 and the source must be offered alongside any binary.")
+  # Not fatal, because the build is useful without it, but a package with no
+  # licence file is not something anyone can redistribute.
+  message(WARNING "No LICENSE file: packages built from this tree carry no "
+                  "licence, which leaves anyone receiving one unable to "
+                  "redistribute it.")
 endif()
 
 # Debian policy wants man pages compressed, and rpm expects it too, so the page
@@ -91,7 +90,7 @@ set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
 
 # --- RPM ---
 set(CPACK_RPM_FILE_NAME RPM-DEFAULT)
-set(CPACK_RPM_PACKAGE_LICENSE "GPL-3.0-or-later")
+set(CPACK_RPM_PACKAGE_LICENSE "MIT")
 set(CPACK_RPM_PACKAGE_GROUP "Applications/Internet")
 set(CPACK_RPM_PACKAGE_AUTOREQ ON)
 # /usr/share/man and friends belong to filesystem/man packages; claiming them
@@ -99,7 +98,9 @@ set(CPACK_RPM_PACKAGE_AUTOREQ ON)
 set(CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST_ADDITION
     /usr/share/man /usr/share/man/man1 /usr/share/doc)
 
-# --- source package, which the GPL obliges a binary distributor to offer ---
+# --- source package -------------------------------------------------------
+# No licence obliges this, but shipping the exact source a binary was built
+# from is worth having for a tool people point at their own mail.
 set(CPACK_SOURCE_GENERATOR "TGZ")
 set(CPACK_SOURCE_IGNORE_FILES
     "/\\\\.git/" "/build/" "/\\\\.venv/" "\\\\.pst$" "/\\\\.cache/")

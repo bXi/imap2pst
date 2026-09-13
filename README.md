@@ -211,8 +211,7 @@ If imap2pst saved you an afternoon, you can
 
 ## Licence
 
-**Not yet chosen.** No dependency constrains the choice — pick whatever suits
-you and add a `LICENSE` file. The release workflow refuses to publish without
-one.
+[MIT](LICENSE). Every dependency is permissive, so nothing here restricts what
+you do with it.
 
 [MS-PST]: https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-pst/

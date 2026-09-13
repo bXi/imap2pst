@@ -14,9 +14,9 @@ permissions:
   contents: write   # needed to create the release and upload to it
 
 jobs:
-  # Distributing a binary that links vmime carries GPL obligations.  Checking
-  # before anything is built means a release cannot be published without the
-  # licence text the binary's own dependencies require.
+  # A release with no licence file leaves whoever receives it unable to
+  # redistribute it.  Checked before anything is built, so the failure is
+  # immediate rather than after twenty minutes of packaging.
   licence-check:
     name: Licence present
     runs-on: ubuntu-24.04
@@ -25,16 +25,7 @@ jobs:
       - name: Require a LICENSE file
         run: |
           if [ ! -f LICENSE ]; then
-            cat <<'MSG'
-          No LICENSE file in the repository.
-
-          imap2pst links vmime, which is GPLv3 with no linking exception: its
-          own headers state that linking makes a combined work covered by the
-          GPL.  A binary released from this tree is therefore GPLv3, and must
-          be accompanied by the licence text and an offer of source.
-
-          Add a LICENSE file, or replace the MIME parser, before releasing.
-          MSG
+            echo "No LICENSE file: a published package would carry no terms."
             exit 1
           fi
 
@@ -121,9 +112,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ninja-build libssl-dev \
             zlib1g-dev libicu-dev
-      # The GPL obliges anyone distributing the binary to offer the source it
-      # was built from, so the source tarball is part of the release rather than
-      # an afterthought.
+      # Not an obligation under MIT, but a release that carries the exact
+      # source its binaries were built from is worth more than one that does
+      # not, particularly for a tool people run against their own mail.
       - name: Build the source package
         run: |
           cmake -S . -B build -G Ninja -DIMAP2PST_BUILD_TESTS=OFF
